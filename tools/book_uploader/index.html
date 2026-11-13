@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Книги MeshPocket</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&family=PT+Mono&display=swap">
+<style>
+:root {
+  --paper: #eef0ef; --surface: #f8f9f8; --ink: #1d2321; --muted: #5d6763; --line: #cdd3d0;
+  --accent: #0d6b62; --accent-soft: #d5ebe7; --bad: #a3302a;
+  --f-body: "PT Sans", "Segoe UI", Roboto, sans-serif; --f-mono: "PT Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #151a19; --surface: #1d2422; --ink: #e3e8e6; --muted: #9aa5a1; --line: #33403c;
+          --accent: #5cc2b5; --accent-soft: #1f3a36; --bad: #e0776f; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--f-body); }
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; display: grid; gap: 20px; }
+h1 { margin: 0; font-size: 30px; line-height: 1.2; }
+h2 { margin: 0; font-size: 19px; }
+p { margin: 0; }
+.muted { color: var(--muted); font-size: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+button { font: 700 15px/1 var(--f-body); padding: 10px 16px; border-radius: 8px; border: 1px solid var(--accent);
+         background: transparent; color: var(--accent); cursor: pointer; }
+button.solid { background: var(--accent); color: var(--surface); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, label.drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.danger { border-color: var(--bad); color: var(--bad); padding: 6px 10px; font-size: 13px; }
+.pill { font: 700 12px/1 var(--f-body); padding: 5px 9px; border-radius: 99px; background: var(--line); color: var(--muted); }
+.pill.on { background: var(--accent-soft); color: var(--accent); }
+label.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 22px; text-align: center; color: var(--muted); cursor: pointer; display: block; }
+label.drop.over { border-color: var(--accent); color: var(--accent); }
+label.drop input { display: none; }
+.field { display: grid; gap: 4px; }
+.field input[type=text] { font: 16px var(--f-body); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); width: 100%; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 15px; }
+.bar { height: 8px; background: var(--accent-soft); border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); }
+.books { display: grid; gap: 0; }
+.book { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 12px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.book:last-child { border-bottom: 0; }
+.book .t { overflow-wrap: anywhere; }
+.book .n { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+pre.preview { font: 14px/1.45 var(--f-mono); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+              max-height: 220px; overflow: auto; white-space: pre-wrap; margin: 0; }
+#log { font: 13px/1.4 var(--f-mono); color: var(--muted); white-space: pre-wrap; }
+.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <header style="display:grid;gap:8px">
+    <h1>Книги MeshPocket</h1>
+    <p class="muted">Загрузка текстов в читалку прошивки MeshCore по Bluetooth. Нужен Chrome или Edge на компьютере или Android (на iPhone — браузер Bluefy). Перед подключением отключите приложение MeshCore на телефоне: устройство принимает одно подключение.</p>
+  </header>
+
+  <section class="card">
+    <div class="row">
+      <h2>Устройство</h2>
+      <span id="state" class="pill">не подключено</span>
+    </div>
+    <div class="row">
+      <span id="space" class="muted">Подключитесь, чтобы увидеть книги и свободное место.</span>
+      <span style="display:flex;gap:8px">
+        <button id="connect" class="solid" type="button">Подключить</button>
+        <button id="disconnect" type="button" hidden>Отключить</button>
+      </span>
+    </div>
+    <p id="nobt" class="err" hidden>Этот браузер не поддерживает Web Bluetooth. Откройте страницу в Chrome или Edge.</p>
+    <div id="books" class="books"></div>
+  </section>
+
+  <section class="card">
+    <h2>Новая книга</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".txt,.fb2,text/plain,application/xml">
+      <b>Перетащите .txt или .fb2 сюда</b><br><span class="muted">или нажмите, чтобы выбрать файл</span>
+    </label>
+    <div id="prep" hidden style="display:grid;gap:12px">
+      <div class="field">
+        <label for="title" class="muted">Название на устройстве</label>
+        <input type="text" id="title" maxlength="60">
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="join"> склеивать строки в абзацы</label>
+        <label><input type="checkbox" id="hyph" checked> мягкие переносы</label>
+      </div>
+      <p id="stats" class="muted"></p>
+      <pre class="preview" id="preview"></pre>
+      <div class="row">
+        <button id="upload" class="solid" type="button" disabled>Загрузить на устройство</button>
+        <button id="cancel" type="button" hidden>Отменить</button>
+      </div>
+      <div class="bar"><i id="bar"></i></div>
+      <p id="progress" class="muted"></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Журнал</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ---- protocol (examples/companion_radio/BookStore.cpp) ----
+const NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";   // we write
+const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";   // device notifies
+const CMD_BOOK = 0xB0;
+const SUB = { INFO: 1, LIST: 2, BEGIN: 3, DATA: 4, END: 5, DELETE: 6, ABORT: 7 };
+const ERRORS = {
+  1: "на устройстве не хватает места", 2: "уже загружено максимальное число книг", 3: "ошибка файловой системы",
+  4: "контрольная сумма не совпала", 5: "сбилась позиция", 6: "книга не найдена", 7: "загрузка не начата", 8: "неверные данные",
+};
+
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+function log(msg, bad) {
+  const line = document.createElement("div");
+  if (bad) line.className = "err";
+  line.textContent = new Date().toLocaleTimeString() + "  " + msg;
+  logEl.prepend(line);
+}
+
+// ---- Windows-1251 ----
+const CP_DEC = new TextDecoder("windows-1251");
+const CP_ENC = new Map();
+for (let b = 0; b < 256; b++) {
+  const ch = CP_DEC.decode(new Uint8Array([b]));
+  if (b >= 0x20 || b === 10) if (!CP_ENC.has(ch)) CP_ENC.set(ch, b);
+}
+const SUBST = {
+  "‐": "-", "‑": "-", "‒": "-", "―": "—", "−": "-", "′": "'", "″": "\"",
+  " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", "​": "", "﻿": "",
+  "≈": "~", "×": "x", "→": "->", "←": "<-", "½": "1/2", "¼": "1/4", "¾": "3/4",
+  "‟": "\"", "‛": "'", "‹": "<", "›": ">", "´": "'", "`": "'",
+};
+function toCp1251(text, stats) {
+  const out = [];
+  for (const ch of text) {
+    if (ch === "\n") { out.push(10); continue; }
+    let b = CP_ENC.get(ch);
+    if (b === undefined) {
+      const s = SUBST[ch];
+      if (s !== undefined) { for (const c of s) { const k = CP_ENC.get(c); if (k !== undefined) out.push(k); } continue; }
+      const cp = ch.codePointAt(0);
+      if (cp >= 0x1F000 || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0xFE00 && cp <= 0xFE0F)) { stats.dropped++; continue; }   // emoji
+      stats.unknown.set(ch, (stats.unknown.get(ch) || 0) + 1);
+      b = 0x3F;
+    }
+    out.push(b);
+  }
+  return new Uint8Array(out);
+}
+
+// ---- CRC-32 (zlib), as crc32Update() on the device ----
+const CRC_T = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+function crc32(bytes) { let c = 0xFFFFFFFF; for (const b of bytes) c = CRC_T[(c ^ b) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// ---- reading files ----
+function decodeBytes(buf) {
+  const u = new Uint8Array(buf);
+  if (u[0] === 0xFF && u[1] === 0xFE) return new TextDecoder("utf-16le").decode(u);
+  if (u[0] === 0xFE && u[1] === 0xFF) return new TextDecoder("utf-16be").decode(u);
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(u); } catch (e) { /* not UTF-8 */ }
+  // FB2 may declare its own encoding
+  const head = CP_DEC.decode(u.slice(0, 200));
+  const m = head.match(/encoding="([^"]+)"/i);
+  if (m) { try { return new TextDecoder(m[1].toLowerCase()).decode(u); } catch (e) { /* unknown label */ } }
+  return CP_DEC.decode(u);
+}
+
+function parseFb2(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, "application/xml");
+  if (doc.querySelector("parsererror")) return null;
+  const ti = doc.querySelector("description title-info");
+  const q = (sel) => (ti && ti.querySelector(sel) ? ti.querySelector(sel).textContent.trim() : "");
+  const author = [q("author first-name"), q("author last-name")].filter(Boolean).join(" ");
+  const bookTitle = q("book-title");
+  const paras = [];
+  const text = (el) => el.textContent.replace(/\s+/g, " ").trim();
+  function walk(el) {
+    for (const ch of el.children) {
+      const n = ch.localName;
+      if (n === "p" || n === "v" || n === "subtitle" || n === "text-author") paras.push(text(ch));
+      else if (n === "empty-line") paras.push("");
+      else if (n === "title") { if (paras.length && paras[paras.length - 1] !== "") paras.push(""); walk(ch); paras.push(""); }
+      else if (n === "section" || n === "epigraph" || n === "poem" || n === "stanza" || n === "cite" || n === "annotation") { walk(ch); if (n === "stanza") paras.push(""); }
+    }
+  }
+  const bodies = [...doc.getElementsByTagName("body")];
+  for (const body of bodies) {
+    if (body.getAttribute("name") === "notes") { paras.push("", "Примечания", ""); }
+    walk(body);
+  }
+  return { title: [author, bookTitle].filter(Boolean).join(". "), text: paras.join("\n") };
+}
+
+// lines wrapped at a fixed width (Project Gutenberg style) -> paragraphs
+function looksHardWrapped(text) {
+  const lines = text.split("\n").filter((l) => l.trim());
+  if (lines.length < 20) return false;
+  const lens = lines.map((l) => l.length).sort((a, b) => a - b);
+  const p90 = lens[Math.floor(lens.length * 0.9)];
+  const blank = (text.match(/\n\s*\n/g) || []).length;
+  return p90 < 90 && blank > lines.length / 30;
+}
+
+function normalize(text, join) {
+  text = text.replace(/\r\n?/g, "\n").replace(/\t/g, " ");
+  let lines = text.split("\n").map((l) => l.replace(/[  ]+/g, (m) => m.includes(" ") ? " " : " ").trim());
+  if (join) {
+    const out = []; let cur = "";
+    for (const l of lines) {
+      if (!l) { if (cur) out.push(cur); cur = ""; out.push(""); continue; }
+      cur = cur ? (cur.endsWith("-") && /[а-яёa-z]$/i.test(cur.slice(0, -1)) ? cur.slice(0, -1) + l : cur + " " + l) : l;
+    }
+    if (cur) out.push(cur);
+    lines = out;
+  }
+  text = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  // typography: spaced hyphen -> dash, and a dash never starts a line
+  text = text.replace(/ (-|--|–) /g, " — ").replace(/ —/g, " —");
+  return text;
+}
+
+// soft hyphens by P. Khristov's rules for Russian
+const HY = (() => {
+  const a = "[абвгдеёжзийклмнопрстуфхцчшщъыьэюя]", l = "[аеёиоуыэюя]", c = "[бвгджзклмнпрстфхцчшщ]", x = "[йъь]";
+  return [
+    new RegExp("(" + x + ")(" + a + a + ")", "ig"),
+    new RegExp("(" + l + ")(" + l + a + ")", "ig"),
+    new RegExp("(" + l + c + ")(" + c + l + ")", "ig"),
+    new RegExp("(" + c + l + ")(" + c + l + ")", "ig"),
+    new RegExp("(" + l + c + ")(" + c + c + l + ")", "ig"),
+    new RegExp("(" + l + c + c + ")(" + c + c + l + ")", "ig"),
+  ];
+})();
+function hyphenate(text) {
+  return text.replace(/[а-яё]{5,}/gi, (w) => {
+    for (let pass = 0; pass < 2; pass++) for (const re of HY) w = w.replace(re, "$1­$2");
+    // keep at least two letters before and after a break
+    return w.replace(/^([^­]?)­/, "$1").replace(/­([^­]?)$/, "$1");
+  });
+}
+
+// ---- prepared book ----
+let source = null;   // { name, raw, fb2Title }
+let prepared = null; // { bytes, crc, title }
+
+async function loadFile(file) {
+  const buf = await file.arrayBuffer();
+  let raw = decodeBytes(buf);
+  let title = file.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
+  if (/\.fb2$/i.test(file.name) || /<FictionBook/i.test(raw.slice(0, 2000))) {
+    const fb = parseFb2(raw);
+    if (fb) { raw = fb.text; if (fb.title) title = fb.title; }
+    else log("FB2 не разобрался как XML, загружаю как текст", true);
+  }
+  source = { name: file.name, raw };
+  $("title").value = title;
+  $("join").checked = looksHardWrapped(raw);
+  $("prep").hidden = false;
+  prepare();
+}
+
+function prepare() {
+  if (!source) return;
+  let text = normalize(source.raw, $("join").checked);
+  if ($("hyph").checked) text = hyphenate(text);
+  const stats = { dropped: 0, unknown: new Map() };
+  const bytes = toCp1251(text, stats);
+  const titleBytes = toCp1251($("title").value.trim() || source.name, { dropped: 0, unknown: new Map() }).slice(0, 47);
+  prepared = { bytes, crc: crc32(bytes), title: titleBytes };
+  let msg = `${(bytes.length / 1024).toFixed(1)} КБ на устройстве, ${text.split("\n").filter(Boolean).length} абзацев.`;
+  if (stats.dropped) msg += ` Эмодзи убрано: ${stats.dropped}.`;
+  if (stats.unknown.size) msg += ` Нет в шрифте, заменено на «?»: ${[...stats.unknown.keys()].slice(0, 12).join(" ")}`;
+  if (info && bytes.length * 1.04 + 1024 > info.free) msg += " Не хватает места на устройстве: удалите книгу.";
+  $("stats").textContent = msg;
+  $("preview").textContent = CP_DEC.decode(bytes.slice(0, 1500)).replace(/­/g, "").replace(/ /g, " ") + (bytes.length > 1500 ? "\n…" : "");
+  refreshButtons();
+}
+
+// ---- Bluetooth link ----
+let device = null, rx = null, tx = null, info = null, busy = false, cancelled = false;
+let waiter = null;
+
+function onNotify(ev) {
+  const v = new Uint8Array(ev.target.value.buffer.slice(0));
+  if (v[0] !== CMD_BOOK || !waiter) return;   // other companion pushes are ignored
+  if (v[1] !== waiter.sub) return;
+  const w = waiter; waiter = null; clearTimeout(w.timer); w.resolve(v);
+}
+
+function request(sub, payload = [], timeoutMs = 8000) {
+  const frame = new Uint8Array(2 + payload.length);
+  frame[0] = CMD_BOOK; frame[1] = sub; frame.set(payload, 2);
+  return new Promise((resolve, reject) => {
+    waiter = { sub, resolve, timer: setTimeout(() => { waiter = null; reject(new Error("устройство не ответило")); }, timeoutMs) };
+    const write = rx.writeValueWithResponse ? rx.writeValueWithResponse(frame) : rx.writeValue(frame);
+    write.catch((e) => { if (waiter) { clearTimeout(waiter.timer); waiter = null; } reject(e); });
+  });
+}
+
+const u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+const rd32 = (a, i) => (a[i] | (a[i + 1] << 8) | (a[i + 2] << 16) | (a[i + 3] << 24)) >>> 0;
+function check(resp) { if (resp[2] !== 0) throw new Error(ERRORS[resp[2]] || "ошибка " + resp[2]); return resp; }
+
+async function connect() {
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [NUS] }], optionalServices: [NUS] });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    $("state").textContent = "подключение…";
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS);
+    rx = await svc.getCharacteristic(NUS_RX);
+    tx = await svc.getCharacteristic(NUS_TX);
+    tx.addEventListener("characteristicvaluechanged", onNotify);
+    await tx.startNotifications();          // first secured access: the system asks for the PIN here
+    $("state").textContent = "подключено"; $("state").classList.add("on");
+    $("connect").hidden = true; $("disconnect").hidden = false;
+    log("подключено: " + (device.name || "устройство"));
+    await refreshList(true);
+  } catch (e) {
+    log("не удалось подключиться: " + e.message, true);
+    $("state").textContent = "не подключено";
+  }
+}
+
+function onDisconnected() {
+  rx = tx = null; info = null;
+  $("state").textContent = "не подключено"; $("state").classList.remove("on");
+  $("connect").hidden = false; $("disconnect").hidden = true;
+  $("space").textContent = "Подключитесь, чтобы увидеть книги и свободное место.";
+  $("books").replaceChildren();
+  log("отключено");
+  refreshButtons();
+}
+
+async function refreshList(firstTime) {
+  const r = check(await request(SUB.INFO, [], firstTime ? 40000 : 8000));
+  if (r[3] !== 1) log("версия протокола на устройстве: " + r[3], true);
+  info = { count: r[4], max: r[5], free: rd32(r, 6), total: rd32(r, 10), current: r[14], chunk: r.length >= 19 ? rd32(r, 15) : 160 };
+  $("space").textContent = `Книг: ${info.count} из ${info.max}. Свободно ${(info.free / 1024).toFixed(0)} из ${(info.total / 1024).toFixed(0)} КБ.`;
+  const list = $("books"); list.replaceChildren();
+  for (let i = 0; i < info.count; i++) {
+    const b = check(await request(SUB.LIST, [i]));
+    const id = b[5], size = rd32(b, 7), pos = rd32(b, 11);
+    const title = CP_DEC.decode(b.slice(15));
+    const row = document.createElement("div"); row.className = "book";
+    const t = document.createElement("span"); t.className = "t"; t.textContent = title + (id === info.current ? "  · открыта" : "");
+    const n = document.createElement("span"); n.className = "n";
+    n.textContent = `${(size / 1024).toFixed(0)} КБ · ${size ? Math.floor(pos * 100 / size) : 0}%`;
+    const del = document.createElement("button"); del.type = "button"; del.className = "danger"; del.textContent = "Удалить";
+    del.addEventListener("click", () => deleteBook(id, title, del));
+    row.append(t, n, del); list.append(row);
+  }
+  if (!info.count) { const p = document.createElement("p"); p.className = "muted"; p.textContent = "На устройстве пока нет книг."; list.append(p); }
+  prepare();
+  refreshButtons();
+}
+
+async function deleteBook(id, title, btn) {
+  if (btn.dataset.armed !== "1") {      // second click confirms
+    btn.dataset.armed = "1"; btn.textContent = "Точно удалить?";
+    setTimeout(() => { btn.dataset.armed = ""; btn.textContent = "Удалить"; }, 4000);
+    return;
+  }
+  if (busy) return;
+  busy = true;
+  try { check(await request(SUB.DELETE, [id])); log("удалена: " + title); await refreshList(); }
+  catch (e) { log("не удалось удалить: " + e.message, true); }
+  busy = false; refreshButtons();
+}
+
+async function upload() {
+  if (!prepared || !rx || busy) return;
+  busy = true; cancelled = false; refreshButtons();
+  const { bytes, crc, title } = prepared;
+  const t0 = performance.now();
+  try {
+    check(await request(SUB.BEGIN, [...u32(bytes.length), ...u32(crc), ...title], 15000));
+    const chunk = Math.min(info ? info.chunk : 160, 160);
+    let off = 0, fails = 0;
+    while (off < bytes.length) {
+      if (cancelled) { await request(SUB.ABORT).catch(() => {}); throw new Error("отменено"); }
+      const part = bytes.slice(off, off + chunk);
+      let r;
+      try { r = await request(SUB.DATA, [...u32(off), ...part], 10000); }
+      catch (e) { if (++fails > 5 || !rx) throw e; log("повтор порции с " + off); continue; }
+      const next = rd32(r, 3);
+      if (r[2] === 0 || r[2] === 5) { off = next; fails = 0; }   // 5: device already has it, continue from next
+      else check(r);
+      const pct = off / bytes.length;
+      $("bar").style.width = (pct * 100).toFixed(1) + "%";
+      const kbs = off / 1024 / ((performance.now() - t0) / 1000);
+      $("progress").textContent = `Загружено ${(off / 1024).toFixed(1)} из ${(bytes.length / 1024).toFixed(1)} КБ, ${kbs.toFixed(1)} КБ/с`;
+    }
+    check(await request(SUB.END, [], 15000));
+    log(`загружена: ${CP_DEC.decode(title)} (${(bytes.length / 1024).toFixed(1)} КБ за ${((performance.now() - t0) / 1000).toFixed(0)} с)`);
+    $("progress").textContent = "Готово. Книга появилась на странице «Книги» на устройстве.";
+    await refreshList();
+  } catch (e) {
+    log("загрузка не удалась: " + e.message, true);
+    $("progress").textContent = "Загрузка не удалась: " + e.message;
+  }
+  busy = false; refreshButtons();
+}
+
+function refreshButtons() {
+  $("upload").disabled = !prepared || !rx || busy;
+  $("cancel").hidden = !busy;
+  $("connect").disabled = busy;
+}
+
+// ---- wiring ----
+if (!navigator.bluetooth) { $("nobt").hidden = false; $("connect").disabled = true; }
+$("connect").addEventListener("click", connect);
+$("disconnect").addEventListener("click", () => device && device.gatt.disconnect());
+$("upload").addEventListener("click", upload);
+$("cancel").addEventListener("click", () => { cancelled = true; });
+$("file").addEventListener("change", (e) => e.target.files[0] && loadFile(e.target.files[0]));
+$("join").addEventListener("change", prepare);
+$("hyph").addEventListener("change", prepare);
+$("title").addEventListener("input", prepare);
+const drop = $("drop");
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+refreshButtons();
+</script>
+</body>
+</html>

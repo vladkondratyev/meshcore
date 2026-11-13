@@ -57,6 +57,11 @@
 
 #include "icons.h"
 
+#ifdef BOOK_READER
+  #include "ReaderScreen.h"
+  #include <helpers/reader/Cp1251.h>
+#endif
+
 #ifdef UI_MSG_TICKER
   #include <helpers/ui/CyrillicFont.h>   // utf8Next()
   #include <helpers/ui/TickerFont.h>
@@ -201,6 +206,9 @@ static void formatClockDate(uint32_t t, int16_t tz_mins, uint8_t lang, char* buf
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
+#ifdef BOOK_READER
+    BOOKS,
+#endif
     RECENT,
     NEIGHBORS,
     RADIO,
@@ -582,6 +590,37 @@ public:
         display.setColor(UIColor::secondary_txt);
         display.drawTextCentered(display.width() / 2, display.height() - 11, line);
       }
+#ifdef BOOK_READER
+    } else if (_page == HomePage::BOOKS) {
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(1);
+      if (!book_store.ready()) {
+        display.drawTextCentered(display.width() / 2, 28, "storage error");
+      } else if (book_store.count() == 0) {
+        display.drawTextCentered(display.width() / 2, 22, "No books");
+        display.setColor(UIColor::secondary_txt);
+        display.drawTextCentered(display.width() / 2, 36, "upload via Bluetooth");
+      } else {
+        sprintf(tmp, "Books: %d", (int)book_store.count());
+        display.drawTextCentered(display.width() / 2, 20, tmp);
+        int16_t cur = book_store.current();
+        const BookEntry* e = cur >= 0 ? book_store.find((uint8_t)cur) : NULL;
+        if (e) {
+          char utf8[BOOK_TITLE_MAX * 3];
+          char shown[BOOK_TITLE_MAX * 3];
+          cp1251ToUtf8(utf8, sizeof(utf8), e->title);
+          display.translateUTF8ToBlocks(shown, utf8, sizeof(shown));
+          int w = display.getTextWidth(shown);
+          int x = w < display.width() - 4 ? (display.width() - w) / 2 : 2;
+          display.drawTextEllipsized(x, 32, display.width() - 4, shown);
+          sprintf(tmp, "%d%%", e->size ? (int)((uint64_t)e->pos * 100 / e->size) : 0);
+          display.setColor(UIColor::secondary_txt);
+          display.drawTextCentered(display.width() / 2, 42, tmp);
+        }
+      }
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "read: " PRESS_LABEL);
+#endif
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       int shown = 0;
@@ -1202,6 +1241,12 @@ public:
       _task->applyPowerProfile(choices[next].boost, choices[next].lna, choices[next].cpu);
       return true;
     }
+#ifdef BOOK_READER
+    if (c == KEY_ENTER && _page == HomePage::BOOKS) {
+      _task->openReader();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -1829,9 +1874,20 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
   clock = (display != NULL && display->isEink())
       ? new ClockScreen(this, &rtc_clock, (MsgPreviewScreen*)msg_preview, node_prefs) : NULL;
+#ifdef BOOK_READER
+  reader = display != NULL ? new ReaderScreen(this, &book_store) : NULL;
+#endif
   _idle_since = millis();
   syncDisplayRefresh();
   setCurrScreen(splash);
+}
+
+void UITask::openReader() {
+#ifdef BOOK_READER
+  if (!reader) return;
+  ((ReaderScreen*)reader)->enter();
+  setCurrScreen(reader);
+#endif
 }
 
 void UITask::showAlert(const char* text, int duration_millis) {
@@ -1896,7 +1952,7 @@ void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
-  if (msgcount == 0 && curr != clock) {
+  if (msgcount == 0 && curr != clock && !inReader()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -1907,7 +1963,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text, group);
-  if (curr == clock) {
+  if (curr == clock || inReader()) {   // the reader only shows an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
@@ -2178,7 +2234,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home) return c;
+  if (curr == home || inReader()) return c;
   return 0;
 }
 
@@ -2186,7 +2242,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview) return c;
+  if (curr == home || curr == msg_preview || inReader()) return c;
   toggleBuzzer();
   return 0;
 }

@@ -52,6 +52,7 @@ class UITask : public AbstractUITask {
   UIScreen* home;
   UIScreen* msg_preview;
   UIScreen* clock;
+  UIScreen* reader;    // e-book reader (BOOK_READER builds)
   UIScreen* curr;
   unsigned long _idle_since;
 
@@ -73,11 +74,14 @@ public:
     ui_started_at = 0;
     curr = NULL;
     clock = NULL;
+    reader = NULL;
     _idle_since = 0;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
   void gotoHomeScreen() { setCurrScreen(home); }
+  void openReader();
+  bool inReader() const { return curr != NULL && curr == reader; }
   void showMsgPreview() { setCurrScreen(msg_preview); }
   bool reopenMsgPreview();
   void keepDisplayAwake();

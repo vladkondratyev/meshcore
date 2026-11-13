@@ -1,6 +1,9 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include "MyMesh.h"
+#ifdef BOOK_READER
+  #include "BookStore.h"
+#endif
 
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
@@ -153,6 +156,9 @@ void setup() {
   #endif
   #endif
   store.begin();
+#ifdef BOOK_READER
+  book_store.begin();   // own flash region; formats itself when empty
+#endif
   the_mesh.begin(
     #ifdef DISPLAY_CLASS
         disp != NULL

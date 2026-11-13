@@ -1,5 +1,8 @@
 #include "MyMesh.h"
 #include <helpers/RadioProfiles.h>
+#ifdef BOOK_READER
+  #include "BookStore.h"
+#endif
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
@@ -2252,6 +2255,11 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_TABLE_FULL);
     }
+#ifdef BOOK_READER
+  } else if (cmd_frame[0] == 0xB0) {   // e-book upload (tools/book_uploader), see BookStore.cpp
+    size_t n = book_store.handleCommand(cmd_frame, len, out_frame);
+    _serial->writeFrame(out_frame, n);
+#endif
   } else {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
     MESH_DEBUG_PRINTLN("ERROR: unknown command: %02X", cmd_frame[0]);
