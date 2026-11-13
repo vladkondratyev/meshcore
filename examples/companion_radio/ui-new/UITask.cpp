@@ -57,6 +57,24 @@
 
 #include "icons.h"
 
+#ifdef UI_MSG_TICKER
+  #include <helpers/ui/CyrillicFont.h>   // utf8Next()
+  #include <helpers/ui/TickerFont.h>
+  #ifndef TICKER_DOT
+    #define TICKER_DOT      8     // one font dot = 8x8 physical pixels (5x7 font -> 40x56 px letter)
+  #endif
+  #ifndef TICKER_DOT_GAP
+    #define TICKER_DOT_GAP  2     // dark gap between dots, gives the LED-board look
+  #endif
+  #ifndef TICKER_STEP_MS
+    #define TICKER_STEP_MS  50    // text moves one dot per step: 20 dots/s, about 3 letters/s
+  #endif
+  #ifndef TICKER_PASSES
+    #define TICKER_PASSES   1     // how many times a new message runs across the screen
+  #endif
+  #define TICKER_MAX_COLS  ((MAX_TEXT_LEN + 2) * 6)
+#endif
+
 struct PowerChoice {
   bool boost;
   bool lna;
@@ -1284,6 +1302,94 @@ class MsgPreviewScreen : public UIScreen {
     page_until = millis() + MSG_PAGE_MILLIS;
   }
 
+#ifdef UI_MSG_TICKER
+  // Running line: a just-received message crosses the screen in big dots,
+  // then the normal preview below takes over unchanged.
+  uint8_t tk_cols[TICKER_MAX_COLS];   // one byte per dot column, bit 0 = top row
+  int tk_len = 0;
+  int tk_pos = 0;                     // scroll offset in dot columns
+  int tk_pass = 0;
+  bool tk_active = false;
+  char tk_origin[62];
+
+  static const TickerGlyph* tickerGlyph(uint32_t cp) {
+    if (cp >= 'a' && cp <= 'z') cp -= 0x20;
+    else if (cp >= 0x430 && cp <= 0x44F) cp -= 0x20;   // а..я -> А..Я
+    else if (cp == 0x451) cp = 0x401;                  // ё -> Ё
+    for (int i = 0; i < TICKER_GLYPH_COUNT; i++) {
+      if (TICKER_GLYPHS[i].cp == cp) return &TICKER_GLYPHS[i];
+    }
+    return NULL;
+  }
+
+  void startTicker(const char* origin, const char* msg) {
+    tk_len = 0;
+    bool gap = true;   // swallow leading and repeated blanks
+    for (const char* s = msg; *s && tk_len < TICKER_MAX_COLS - 6; ) {
+      uint32_t cp = 0;
+      s = utf8Next(s, cp);
+      const TickerGlyph* gl = tickerGlyph(cp);
+      if (!gl) {            // space, emoji, anything without a glyph -> one blank
+        if (!gap) { for (int i = 0; i < 3; i++) tk_cols[tk_len++] = 0; gap = true; }
+        continue;
+      }
+      for (int i = 0; i < gl->w; i++) tk_cols[tk_len++] = gl->cols[i];
+      tk_cols[tk_len++] = 0;   // one dot between letters
+      gap = false;
+    }
+    if (tk_len == 0) { tk_active = false; return; }
+    StrHelper::strncpy(tk_origin, origin, sizeof(tk_origin));
+    tk_pos = 0;
+    tk_pass = 0;
+    tk_active = true;
+  }
+
+  int renderTicker(DisplayDriver& display) {
+    _task->keepDisplayAwake();
+
+    // header in the usual small font: who sent it
+    char filtered_origin[sizeof(tk_origin)];
+    display.translateUTF8ToBlocks(filtered_origin, tk_origin, sizeof(filtered_origin));
+    display.setTextSize(1);
+    display.setColor(UIColor::secondary_txt);
+    display.drawTextEllipsized(0, 0, display.width(), filtered_origin);
+    display.setColor(UIColor::corp_blue);
+    display.drawRect(0, 11, display.width(), 1);
+
+    int fw = display.frameWidth(), fh = display.frameHeight();
+    int top = (13 * fh + display.height() - 1) / display.height();   // first pixel row under the line
+    int dot = TICKER_DOT;
+    if (dot * 7 > fh - top) dot = (fh - top) / 7;
+    if (dot < 2) dot = 2;
+    int lit = dot > TICKER_DOT_GAP + 1 ? dot - TICKER_DOT_GAP : dot;
+    int screen_cols = (fw + dot - 1) / dot;
+    int x0 = (fw - screen_cols * dot) / 2;
+    int y0 = top + (fh - top - 7 * dot) / 2;
+
+    display.setColor(UIColor::primary_txt);
+    for (int c = 0; c < screen_cols; c++) {
+      int src = tk_pos - screen_cols + c;   // text enters from the right edge
+      if (src < 0 || src >= tk_len) continue;
+      uint8_t bits = tk_cols[src];
+      for (int r = 0; bits; r++, bits >>= 1) {
+        if (bits & 1) display.fillRectPx(x0 + c * dot, y0 + r * dot, lit, lit);
+      }
+    }
+    display.markFull();
+
+    if (++tk_pos > tk_len + screen_cols) {   // the last letter has left the screen
+      tk_pos = 0;
+      if (++tk_pass >= TICKER_PASSES) {
+        tk_active = false;
+        shown_head = -1;
+        resetPage();
+        return 50;   // draw the normal preview right away
+      }
+    }
+    return TICKER_STEP_MS;
+  }
+#endif
+
   void nextPage() {
     if (page_next > 0) {
       page_start = page_next;
@@ -1418,6 +1524,9 @@ public:
       sprintf(p->origin, "(%d) %s:", (uint32_t) path_len, from_name);
     }
     StrHelper::strncpy(p->msg, msg, sizeof(p->msg));
+#ifdef UI_MSG_TICKER
+    startTicker(p->origin, p->msg);   // the newest message runs across the screen first
+#endif
     // start at the oldest unread; a message that arrives mid-read waits at the end
     if (prev_unread == 0 || head_overwritten) {
       head = oldestUnread();
@@ -1426,6 +1535,12 @@ public:
   }
 
   int render(DisplayDriver& display) override {
+#ifdef UI_MSG_TICKER
+    if (tk_active) {
+      if (!display.isEink()) return renderTicker(display);
+      tk_active = false;   // a running line makes no sense on e-ink
+    }
+#endif
     auto p = &unread[head];
     char filtered_msg[sizeof(p->msg)];
     display.translateUTF8ToBlocks(filtered_msg, p->msg, sizeof(filtered_msg));
@@ -1513,6 +1628,14 @@ public:
   }
 
   bool handleInput(char c) override {
+#ifdef UI_MSG_TICKER
+    if (tk_active) {   // any press stops the running line and shows the usual preview
+      tk_active = false;
+      shown_head = -1;
+      resetPage();
+      return true;
+    }
+#endif
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       bool was_group = unread[head].group;
       num_unread--;
@@ -1791,7 +1914,11 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   }
 
   if (_display != NULL) {
+#ifdef UI_MSG_TICKER
+    if (!_display->isOn()) {   // running-line build: every incoming message wakes the screen
+#else
     if (!_display->isOn() && !hasConnection()) {
+#endif
       _display->turnOn();
     }
     if (_display->isOn()) {

@@ -47,6 +47,14 @@ public:
   virtual int frameWidth() { return _w; }
   virtual int frameHeight() { return _h; }
   virtual void blit1(int x, int y, int w, int h, const uint8_t* bits) { drawXbm(x, y, bits, w, h); }
+  // Filled rectangle in physical pixels (frameWidth x frameHeight). Default maps onto the logical grid.
+  virtual void fillRectPx(int x, int y, int w, int h) {
+    int fw = frameWidth(), fh = frameHeight();
+    if (fw == _w && fh == _h) { fillRect(x, y, w, h); return; }
+    int lx = x * _w / fw, ly = y * _h / fh;
+    int lw = (x + w) * _w / fw - lx, lh = (y + h) * _h / fh - ly;
+    fillRect(lx, ly, lw > 0 ? lw : 1, lh > 0 ? lh : 1);
+  }
   virtual uint16_t getTextWidth(const char* str) = 0;
   virtual void drawTextCentered(int mid_x, int y, const char* str) {   // helper method (override to optimise)
     int w = getTextWidth(str);

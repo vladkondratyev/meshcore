@@ -44,6 +44,9 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  int frameWidth() override { return display.getWidth(); }
+  int frameHeight() override { return display.getHeight(); }
+  void fillRectPx(int x, int y, int w, int h) override { display.fillRect(x, y, w, h); }
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
 };
