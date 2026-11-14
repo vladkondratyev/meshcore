@@ -250,7 +250,7 @@ class HomeScreen : public UIScreen {
   bool _msg_edit = false;    // Msg scroll page: changing settings
 
   // Msg scroll page: running line, Morse entry and the dash time in one place
-  #define MSG_SET_ROWS 5
+  #define MSG_SET_ROWS 6
   #define MSG_SET_SHOWN 3
   void changeMsgSetting() {
     if (!_node_prefs) return;
@@ -264,6 +264,8 @@ class HomeScreen : public UIScreen {
       _node_prefs->kb_layout = _node_prefs->kb_layout ? 0 : 1;
     } else if (_msg_row == 4) {
       _node_prefs->auto_caps = _node_prefs->auto_caps ? 0 : 1;
+    } else if (_msg_row == 5) {
+      _node_prefs->auto_cursor = _node_prefs->auto_cursor ? 0 : 1;
     } else {
       static const uint16_t steps[] = { 200, 250, 300, 350, 400, 500, 600, 800 };
       const int n = sizeof(steps) / sizeof(steps[0]);
@@ -1172,9 +1174,11 @@ public:
       snprintf(dash, sizeof(dash), "%lums", _task->morseDashMs());
       bool ru = _task->langRu();
       const char* layout = _task->kbFreqLayout() ? (ru ? "частотн." : "freq") : (ru ? "ЙЦУКЕН" : "QWERTY");
-      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Morse input", "Morse dash", "Keys layout", "Auto caps" };
+      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Morse input", "Morse dash", "Keys layout", "Auto caps",
+                                           "Auto cursor" };
       const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", morse ? "ON" : "OFF", dash,
-                                           layout, _task->autoCaps() ? "ON" : "OFF" };
+                                           layout, _task->autoCaps() ? "ON" : "OFF",
+                                           _task->autoCursor() ? "ON" : "OFF" };
       display.setTextSize(1);
       // three rows on screen; the window follows the cursor
       int top = 0;
@@ -2354,7 +2358,7 @@ void UITask::loop() {
   } else if (ev == BUTTON_EVENT_QUAD_CLICK) {
     c = handleQuadClick(KEY_QUAD);
   } else if (ev == BUTTON_EVENT_PENTA_CLICK) {   // only the Write keyboard tells five from four
-    c = handleQuadClick(inCompose() ? KEY_PENTA : KEY_QUAD);
+    c = handleQuadClick((inCompose() || inSent()) ? KEY_PENTA : KEY_QUAD);
   }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
@@ -2381,7 +2385,7 @@ void UITask::loop() {
     } else if (ev == BUTTON_EVENT_QUAD_CLICK) {
       c = handleQuadClick(KEY_QUAD);
     } else if (ev == BUTTON_EVENT_PENTA_CLICK) {
-      c = handleQuadClick(inCompose() ? KEY_PENTA : KEY_QUAD);
+      c = handleQuadClick((inCompose() || inSent()) ? KEY_PENTA : KEY_QUAD);
     }
     _analogue_pin_read_millis = millis();
   }

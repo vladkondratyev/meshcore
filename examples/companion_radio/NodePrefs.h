@@ -79,6 +79,7 @@ public:
   uint16_t morse_dash_ms = 300;  // a press this long or longer is a dash, shorter is a dot
   uint8_t kb_layout = 0;         // Write keyboard: 0 = ЙЦУКЕН / QWERTY, 1 = frequent letters together
   uint8_t auto_caps = 1;         // 1 = a capital at the start and after . ! ?
+  uint8_t auto_cursor = 0;       // 1 = after a letter the keyboard cursor moves to the likely next one
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
   uint8_t clock_nodes[CLOCK_NODE_MAX][32];  // pubkeys to poll for time; empty slots are zeros
 
@@ -174,6 +175,7 @@ private:
       def("mdash", _parent->morse_dash_ms); // dot/dash boundary, ms
       def("kbl", _parent->kb_layout);       // keyboard layout
       def("caps", _parent->auto_caps);      // automatic capitals
+      def("acur", _parent->auto_cursor);    // keyboard cursor follows the likely next letter
       def("tvalid", _parent->time_valid);
       for (int i = 0; i < CLOCK_NODE_MAX; i++) {
         char key[8];

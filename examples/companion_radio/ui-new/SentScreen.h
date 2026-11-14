@@ -8,7 +8,8 @@
 //   double - newer message
 //   triple - back to the home pages
 //   hold   - write to the same recipient again
-//   quad   - back to the home pages
+//   quad   - make this text a stock phrase: pick the number with clicks,
+//            hold saves, triple cancels
 
 #include "UITask.h"
 #include "../MyMesh.h"
@@ -24,6 +25,33 @@ class SentScreen : public UIScreen {
   int _page_next = 0;    // offset of the next page, 0 when the text ends here
   unsigned long _page_until = 0;
   int _shown_i = -1, _shown_page = -1;   // what is on the glass, for e-ink full refreshes
+  bool _saving = false;   // choosing which phrase this text replaces
+  int _slot = 0;          // phrase number - 1
+
+  bool ru() const { return _task->langRu(); }
+
+  void renderSave(DisplayDriver& display, SentEntry* e) {
+    char line[64], shown[64];
+    display.setTextSize(1);
+    display.setColor(UIColor::secondary_txt);
+    display.drawTextEllipsized(0, 0, display.width(), ru() ? "Сделать фразой" : "Save as phrase");
+    display.setColor(UIColor::corp_blue);
+    display.drawRect(0, 11, display.width(), 1);
+    snprintf(line, sizeof(line), ru() ? "фраза %d: %s" : "phrase %d: %s", _slot + 1, the_mesh.uiPhrase(_slot));
+    display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+    display.setColor(UIColor::secondary_txt);
+    display.drawTextEllipsized(0, 14, display.width(), shown);
+    snprintf(line, sizeof(line), ru() ? "станет: %s" : "becomes: %s", e->text);
+    display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+    display.setColor(UIColor::primary_txt);
+    display.drawTextEllipsized(0, 26, display.width(), shown);
+    if (strlen(e->text) > UI_PHRASE_LEN - 1) {
+      display.setColor(UIColor::warning_txt);
+      display.drawTextEllipsized(0, 38, display.width(), ru() ? "длинный: обрежется" : "too long: cut short");
+    }
+    display.setColor(UIColor::secondary_txt);
+    display.drawTextCentered(display.width() / 2, 52, ru() ? "1:номер удерж:да 3:нет" : "1:number hold:yes 3:no");
+  }
 
   void resetPage() {
     _page_start = _page_next = 0;
@@ -71,6 +99,7 @@ public:
   void enter() {
     _i = 0;
     _shown_i = -1;
+    _saving = false;
     resetPage();
   }
 
@@ -88,6 +117,10 @@ public:
     }
     if (_i >= log.count()) _i = log.count() - 1;
     SentEntry* e = log.get(_i);
+    if (_saving) {
+      renderSave(display, e);
+      return 5000;
+    }
 
     // title: recipient on the left, position in the list on the right
     char name[48], shown[48], pos[12];
@@ -152,7 +185,36 @@ public:
   bool handleInput(char c) override {
     SentLog& log = _task->sentLog();
     int n = log.count();
-    if (c == KEY_QUAD || c == KEY_SELECT || c == KEY_CANCEL) {
+    if (_saving) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_DOWN) _slot = (_slot + 1) % UI_PHRASE_COUNT;
+      else if (c == KEY_PREV || c == KEY_LEFT || c == KEY_UP) _slot = (_slot + UI_PHRASE_COUNT - 1) % UI_PHRASE_COUNT;
+      else if (c == KEY_ENTER) {
+        SentEntry* e = log.get(_i);
+        if (e) {
+          the_mesh.setUiPhrase(_slot, e->text);
+          char msg[24];
+          snprintf(msg, sizeof(msg), ru() ? "Фраза %d" : "Phrase %d", _slot + 1);
+          _task->showAlert(msg, 1000);
+          _task->notify(UIEventType::ack);
+        }
+        _saving = false;
+        _shown_i = -1;
+      } else {   // triple, quad, five: cancel
+        _saving = false;
+        _shown_i = -1;
+      }
+      return true;
+    }
+    if (c == KEY_QUAD && n > 0) {   // make this text a phrase
+      _saving = true;
+      // start at the first stock phrase of the last screen, or after the last own one
+      _slot = UI_PHRASE_COUNT - 1;
+      for (int i = UI_PHRASE_COUNT - 1; i >= 0; i--) {
+        if (the_mesh.uiPhraseCustom(i)) { _slot = (i + 1) % UI_PHRASE_COUNT; break; }
+      }
+      return true;
+    }
+    if (c == KEY_QUAD || c == KEY_SELECT || c == KEY_CANCEL || c == KEY_PENTA) {
       _task->gotoHomeScreen();
       return true;
     }

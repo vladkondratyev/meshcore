@@ -19,6 +19,7 @@
 #include <helpers/TxtDataHelpers.h>
 #include "MorseTables.h"
 #include "WordHints.h"
+#include "SmartReplies.h"
 
 #ifndef COMPOSE_MAX_TEXT
   #define COMPOSE_MAX_TEXT  120
@@ -136,7 +137,10 @@ class ComposeScreen : public UIScreen {
     if (_sym) return;
     int ws = wordStart();
     int plen = _len - ws;
-    if (plen <= 0) return;
+    if (plen <= 0) {
+      nextWordHints(ws);
+      return;
+    }
     const char* prefix = &_text[ws];
     SentLog& log = _task->sentLog();
     for (int i = 0; i < log.count() && !_hint[1][0]; i++) {
@@ -167,6 +171,55 @@ class ComposeScreen : public UIScreen {
     }
   }
 
+  static bool isSign(char c) { return c == '.' || c == ',' || c == '!' || c == '?' || c == ':'; }
+
+  // after a space: words that usually follow the last one. First pairs from
+  // what this device sent, then the built-in pairs (SmartReplies.h).
+  void nextWordHints(int ws) {
+    int e = ws;
+    while (e > 0 && _text[e - 1] == ' ') e--;
+    if (e == 0 || isSign(_text[e - 1])) return;   // the start of a sentence
+    int b = e;
+    while (b > 0 && _text[b - 1] != ' ') b--;
+    char prev[40], w[40];
+    int n = e - b;
+    if (n >= (int)sizeof(prev)) return;
+    memcpy(w, &_text[b], n);
+    w[n] = 0;
+    lowerText(w, prev, sizeof(prev));
+
+    SentLog& log = _task->sentLog();
+    for (int i = 0; i < log.count() && !_hint[1][0]; i++) {
+      const char* t = log.get(i)->text;
+      char last[40];
+      last[0] = 0;
+      while (*t && !_hint[1][0]) {
+        while (*t == ' ') t++;
+        const char* x = t;
+        while (*x && *x != ' ') x++;
+        const char* end = x;
+        while (end > t && isSign(end[-1])) end--;
+        int len = end - t;
+        if (len > 0 && len < (int)sizeof(w)) {
+          memcpy(w, t, len);
+          w[len] = 0;
+          if (last[0] && strcmp(last, prev) == 0) offerHint(w, len);
+          lowerText(w, last, sizeof(last));
+          if (end < x) last[0] = 0;   // a sign ends the pair
+        } else {
+          last[0] = 0;
+        }
+        t = x;
+      }
+    }
+    const NextWords* tbl = ru() ? NEXT_RU : NEXT_EN;
+    int nt = ru() ? sizeof(NEXT_RU) / sizeof(NEXT_RU[0]) : sizeof(NEXT_EN) / sizeof(NEXT_EN[0]);
+    for (int i = 0; i < nt && !_hint[1][0]; i++) {
+      if (strcmp(tbl[i].word, prev) != 0) continue;
+      for (int k = 0; listField(tbl[i].next, k, w, sizeof(w)); k++) offerHint(w, strlen(w));
+    }
+  }
+
   // replace the word being typed with suggestion k and put a space after it
   void takeHint(int k) {
     if (!_hint[k][0]) return;
@@ -176,6 +229,8 @@ class ComposeScreen : public UIScreen {
       uint32_t cp;
       u8next(&_text[ws], cp);
       cap = cp != cpLower(cp);   // the typed word starts with a capital
+    } else {
+      cap = capsPending();       // a whole next word at the start of a sentence
     }
     char word[48];
     int n = 0;
@@ -195,6 +250,82 @@ class ComposeScreen : public UIScreen {
     _text[_len++] = ' ';
     _text[_len] = 0;
     updateHints();
+  }
+
+  // ------------------------------------------------------------ auto cursor
+  // After a letter the cursor moves to the letter most words continue with
+  // (or to space when the word is likely complete). Off unless `Auto cursor`.
+  void jumpToLikely() {
+    if (!_task->autoCursor() || _sym) return;
+    int ws = wordStart();
+    int plen = _len - ws;
+    if (plen <= 0) return;
+    const char* prefix = &_text[ws];
+    int pcount = utf8Count(prefix);
+    #define JUMP_CAND 12
+    uint32_t cand[JUMP_CAND];
+    long score[JUMP_CAND];
+    int nc = 0;
+    const char* const* dict = ru() ? WORDS_RU : WORDS_EN;
+    int nd = ru() ? sizeof(WORDS_RU) / sizeof(WORDS_RU[0]) : sizeof(WORDS_EN) / sizeof(WORDS_EN[0]);
+    // one word: what follows the typed part, weighted
+    auto tally = [&](const char* word, long weight) {
+      if (!wordExtends(word, prefix, plen) && !(utf8Count(word) == pcount)) return;
+      // the word equal to the prefix: the next key is space
+      const char* p = word;
+      uint32_t cp = 0;
+      for (int k = 0; k < pcount && *p; k++) p = u8next(p, cp);
+      if (!wordExtends(word, prefix, plen)) {
+        // same length: only counts when it is the same word
+        char a[40], b[40];
+        lowerText(word, a, sizeof(a));
+        lowerText(prefix, b, sizeof(b));
+        if (strcmp(a, b) != 0) return;
+        cp = ' ';
+      } else {
+        u8next(p, cp);
+        cp = cpLower(cp);
+      }
+      for (int i = 0; i < nc; i++) if (cand[i] == cp) { score[i] += weight; return; }
+      if (nc < JUMP_CAND) { cand[nc] = cp; score[nc] = weight; nc++; }
+    };
+    SentLog& log = _task->sentLog();
+    for (int i = 0; i < log.count(); i++) {   // words sent before count most
+      const char* t = log.get(i)->text;
+      while (*t) {
+        while (*t == ' ') t++;
+        const char* e = t;
+        while (*e && *e != ' ') e++;
+        const char* end = e;
+        while (end > t && isSign(end[-1])) end--;
+        char w[40];
+        int len = end - t;
+        if (len > 0 && len < (int)sizeof(w)) {
+          memcpy(w, t, len);
+          w[len] = 0;
+          tally(w, nd * 2);
+        }
+        t = e;
+      }
+    }
+    for (int i = 0; i < nd; i++) tally(dict[i], nd - i);
+    int best = -1;
+    for (int i = 0; i < nc; i++) if (best < 0 || score[i] > score[best]) best = i;
+    if (best < 0) return;
+    if (cand[best] == ' ') {   // the word looks complete: go to space
+      _row = KB_ACTION_ROW;
+      _col = actionCol(ACT_SPACE);
+      return;
+    }
+    for (int r = 0; r < KB_KEY_ROWS; r++) {
+      for (int c = 0; c < cols(); c++) {
+        char key[5];
+        keyAt(r, c, key);
+        uint32_t cp;
+        u8next(key, cp);
+        if (cpLower(cp) == cand[best]) { _row = r; _col = c; return; }
+      }
+    }
   }
 
   // ------------------------------------------------------------ capitals
@@ -279,11 +410,45 @@ class ComposeScreen : public UIScreen {
   // screens 4 rows. A phrase that fits half the width shares its row, a longer
   // one takes the whole row. The focus moves on to the next screen after the
   // last phrase of one; the layout is worked out when drawing.
-  static int numPhrases() { return UI_PHRASE_COUNT; }
-  static const char* phraseAt(int i) { return the_mesh.uiPhrase(i); }
+  // A reply puts up to 3 ready answers in front of them (SmartReplies.h).
+  #define SMART_MAX 3
+  char _smart[SMART_MAX][UI_PHRASE_LEN];
+  int _nsmart = 0;
+  int numPhrases() const { return _nsmart + UI_PHRASE_COUNT; }
+  const char* phraseAt(int i) const { return i < _nsmart ? _smart[i] : the_mesh.uiPhrase(i - _nsmart); }
+  bool isSmart(int i) const { return i < _nsmart; }
+
+  void addSmart(const char* a) {
+    if (_nsmart >= SMART_MAX) return;
+    for (int i = 0; i < _nsmart; i++) if (strcmp(_smart[i], a) == 0) return;
+    StrHelper::strncpy(_smart[_nsmart++], a, UI_PHRASE_LEN);
+  }
+
+  // answers that fit the message being answered; the first matching rules win
+  void findSmart(const char* msg) {
+    _nsmart = 0;
+    if (!msg || !msg[0]) return;
+    char low[MAX_TEXT_LEN + 8];
+    lowerText(msg, low, sizeof(low));
+    // a channel message starts with "Name: ", the name is not part of the question
+    char* body = strstr(low, ": ");
+    if (body && body - low < 32) body += 2; else body = low;
+    const SmartRule* rules = ru() ? SMART_RU : SMART_EN;
+    int nr = ru() ? sizeof(SMART_RU) / sizeof(SMART_RU[0]) : sizeof(SMART_EN) / sizeof(SMART_EN[0]);
+    for (int r = 0; r < nr && _nsmart < SMART_MAX; r++) {
+      char key[32];
+      bool hit = false;
+      for (int k = 0; listField(rules[r].keys, k, key, sizeof(key)); k++) {
+        if (strstr(body, key)) { hit = true; break; }
+      }
+      if (!hit) continue;
+      char ans[UI_PHRASE_LEN];
+      for (int k = 0; listField(rules[r].answers, k, ans, sizeof(ans)); k++) addSmart(ans);
+    }
+  }
 
   struct Slot { uint8_t page, row, col, wide; };   // col 0 left, 1 right
-  Slot _slot[UI_PHRASE_COUNT];
+  Slot _slot[SMART_MAX + UI_PHRASE_COUNT];
   int _pages = 1;
 
   void layoutPhrases(DisplayDriver& display) {
@@ -292,7 +457,7 @@ class ComposeScreen : public UIScreen {
     char shown[UI_PHRASE_LEN + 4];
     for (int i = 0; i < numPhrases(); i++) {
       display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
-      bool wide = display.getTextWidth(shown) > half - 6;
+      bool wide = display.getTextWidth(shown) + (isSmart(i) ? 6 : 0) > half - 6;
       if (wide && col == 1) { row++; col = 0; }   // a wide one starts a fresh row
       if (row > 3) { page++; row = 0; col = 0; }
       _slot[i].page = page;
@@ -582,6 +747,11 @@ private:
       const Slot& sl = _slot[i];
       if (sl.page != page) continue;
       display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
+      if (isSmart(i)) {   // a ready answer to this message: "> да"
+        char tmp[sizeof(shown)];
+        snprintf(tmp, sizeof(tmp), ">%s", shown);
+        StrHelper::strncpy(shown, tmp, sizeof(shown));
+      }
       int y = 15 + sl.row * 12;
       if (sl.wide) drawCell(display, 2, y, w - 4, shown, _sel == i + fp, true);
       else drawCell(display, sl.col * half + 2, y, half - 4, shown, _sel == i + fp, true);
@@ -971,6 +1141,7 @@ private:
     keyAt(_row, _col, key);
     typeLetter(key);
     updateHints();
+    jumpToLikely();
   }
 
 public:
@@ -1027,6 +1198,7 @@ public:
     _typed = false;
     _sym = false;
     _hint[0][0] = _hint[1][0] = 0;
+    _nsmart = 0;
   }
 
   // the Write page is left for another screen: typed text becomes a draft
@@ -1040,6 +1212,7 @@ public:
   bool enterTo(const Target& t, const char* re) {
     if (!exists(t)) return false;
     enter();
+    findSmart(re);   // ready answers to this message go first
     if (re && re[0]) {
       StrHelper::strncpy(_re, re, sizeof(_re));
       if (strlen(re) >= sizeof(_re)) {   // cut short: drop a broken last letter
@@ -1129,6 +1302,7 @@ public:
         _sel = _target;
         _target = -1;
         _re[0] = 0;   // another recipient is not a reply
+        _nsmart = 0;
       } else if (ok) {
         if (_sel == 0) {
           startTyping();

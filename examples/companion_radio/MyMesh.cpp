@@ -2550,7 +2550,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set morse on|off, set morse.dash MS, set kb std|freq, set caps on|off, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set morse on|off, set morse.dash MS, set kb std|freq, set caps on|off, set cursor on|off, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -2613,6 +2613,20 @@ void MyMesh::runCLICommand(char* command, Print& out) {
         snprintf(line, sizeof(line), "%d%s %s\n", i + 1, uiPhraseCustom(i) ? "*" : "", uiPhrase(i));
         out.print(line);
       }
+    } else if (memcmp(command, "set cursor", 10) == 0 && (command[10] == 0 || command[10] == ' ')) {
+      // set cursor on|off: the keyboard cursor jumps to the likely next letter
+      const char* arg = &command[10];
+      while (*arg == ' ') arg++;
+      if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+        _prefs.auto_cursor = strcmp(arg, "on") == 0 ? 1 : 0;
+        savePrefs();
+        snprintf(line, sizeof(line), "  > cursor is %s\n", arg);
+      } else if (*arg) {
+        snprintf(line, sizeof(line), "  Error: set cursor on|off\n");
+      } else {
+        snprintf(line, sizeof(line), "  > cursor is %s\n", _prefs.auto_cursor ? "on" : "off");
+      }
+      out.print(line);
     } else if ((memcmp(command, "set kb", 6) == 0 && (command[6] == 0 || command[6] == ' ')) ||
                (memcmp(command, "set caps", 8) == 0 && (command[8] == 0 || command[8] == ' '))) {
       // set kb std|freq: keyboard layout; set caps on|off: automatic capitals
