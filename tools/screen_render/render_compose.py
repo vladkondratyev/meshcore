@@ -30,14 +30,18 @@ LANG = {
     "en": {"phrases": ["ok", "ping", "yes", "no", "hello", "goodbye",
                        "on my way", "arrived", "waiting", "where?", "thanks", "soon", "call back", "SOS",
                        "weather today", "weather tomorrow", "rate", "moon"],
-           "rows": ["1234567890", "qwertyuiop", "asdfghjkl?", "zxcvbnm,.!"],
-           "actions": [(0, "space"), (4, "del"), (7, "SEND")],
+           "rows": ["qwertyuiop", "asdfghjkl.", "zxcvbnm,?!"],
+           "freq": ["itsup?qkyc", "aeolg.!vfd", "hnrw,xzjbm"],
+           "sym": ["1234567890", "-+=/()@#%&", "!?:;\"'*_~$"],
+           "actions": [(0, "space"), (3, "#+"), (5, "del"), (7, "SEND")], "abc": "abc",
            "keyboard": "keyboard"},
     "ru": {"phrases": ["ок", "ping", "да", "нет", "привет", "пока",
                        "в пути", "на месте", "жду", "где ты?", "спасибо", "скоро", "перезвоню", "SOS",
                        "погода сегодня", "погода завтра", "Курс", "луна"],
-           "rows": ["1234567890.,", "йцукенгшщзхъ", "фывапролджэ!", "ячсмитьбюё?:"],
-           "actions": [(0, "space"), (5, "del"), (8, "SEND")],
+           "rows": ["йцукенгшщзхъ", "фывапролджэ.", "ячсмитьбюё,?"],
+           "freq": ["таилячшфэжзп", "ноеруб.щц,гм", "ксвдьх?ъёюйы"],
+           "sym": ["1234567890.,", "-+=/()@#%&*_", "!?:;\"'~$<>[]"],
+           "actions": [(0, "space"), (4, "#+"), (6, "del"), (9, "SEND")], "abc": "абв",
            "keyboard": "клавиатура"},
 }
 
@@ -142,20 +146,25 @@ def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False):
             cell(d, col * half + 2, y, half - 4, p, sel == i + fp, True)
 
 
-def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300):
+def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300, freq=False, caps=True, lang="ru"):
     ro.home_header(d, "TICKER")
     w = d.width()
+    lay = ("частотн." if lang == "ru" else "freq") if freq else ("ЙЦУКЕН" if lang == "ru" else "QWERTY")
     rows = [("Msg scroll", "ON" if scroll else "OFF"), ("Morse input", "ON" if morse else "OFF"),
-            ("Morse dash", "%dms" % dash)]
+            ("Morse dash", "%dms" % dash), ("Keys layout", lay), ("Auto caps", "ON" if caps else "OFF")]
+    top = row - 2 if edit and row >= 3 else 0
     d.setTextSize(1)
-    for i, (l, r) in enumerate(rows):
-        y = 20 + i * 11
+    for i in range(top, top + 3):
+        l, r = rows[i]
+        y = 20 + (i - top) * 11
         d.setColor(WHITE)
         if edit and i == row:
             d.fillRect(0, y - 1, w, 10); d.setColor(BLACK)
         d.setCursor(2, y); d.print(l)
-        d.setCursor(w - 2 - d.getTextWidth(r), y); d.print(r)
+        rr = d.translate(r, 16)
+        d.setCursor(w - 3 - d.getTextWidth(rr), y); d.print(rr)
     d.setColor(WHITE)
+    d.fillRect(w - 1, 19 + 32 * top // 5, 1, 32 * 3 // 5)
     d.drawTextCentered(w // 2, 64 - 11, "hold:change 3x:done" if edit else "settings: " + ro.PRESS_LABEL)
 
 
@@ -221,6 +230,7 @@ MORSE_SCREENS = [
     ("90_msg_settings", "Настройки: удержание — открыть", scr_msg_settings),
     ("91_msg_settings_edit", "Морзе вкл/выкл", lambda d: scr_msg_settings(d, True, 1)),
     ("92_msg_settings_dash", "Порог тире: 200…800 мс", lambda d: scr_msg_settings(d, True, 2)),
+    ("92b_msg_settings_kb", "Раскладка и заглавные", lambda d: scr_msg_settings(d, True, 3)),
     ("93_phrases_morse", "Рядом с клавишами — морзе", lambda d: scr_phrases(d, "ru", "@Алексей", sel=1, morse=True)),
     ("94_morse_idle", "Морзе: подсказки и азбука", lambda d: scr_morse(d, crib=5)),
     ("95_morse_keying", "Нажато .-. — это «р»", lambda d: scr_morse(d, text="пр", code=".-.", tip=1)),
@@ -252,23 +262,60 @@ def scr_neighbors(d, n=7, page=0):
     ro.name_list(d, [(nm, "%+.0f" % snr) for nm, snr in rows])
 
 
-def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0, re=False):
+_WH = open(os.path.join(ROOT, "examples", "companion_radio", "ui-new", "WordHints.h"), encoding="utf-8").read()
+WORDS = {l: re.findall(r'"([^"]+)"', _WH.split("WORDS_%s[] = {" % l.upper())[1].split("};")[0])
+         for l in ("ru", "en")}
+
+
+def hints_for(lang, text):
+    """Same as ComposeScreen::updateHints with an empty Sent list."""
+    part = text.split(" ")[-1]
+    if not part:
+        return ["", ""]
+    out = []
+    for w in WORDS[lang]:
+        if len(w) > len(part) and w.lower().replace("ё", "е").startswith(part.lower().replace("ё", "е")) \
+                and w.lower() not in [o.lower() for o in out]:
+            out.append(w)
+        if len(out) == 2:
+            break
+    return (out + ["", ""])[:2]
+
+
+def caps_due(text):
+    if not text:
+        return True
+    if not text.endswith(" "):
+        return False
+    t = text.rstrip(" ")
+    return not t or t[-1] in ".!?"
+
+
+def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0, re=False,
+             sym=False, freq=False, legend=False, caps=True):
     L = LANG[lang]
-    rows, actions = L["rows"], L["actions"]
+    rows = L["sym"] if sym else (L["freq"] if freq else L["rows"])
+    actions = [(c, (L["abc"] if sym and lab == "#+" else lab)) for c, lab in L["actions"]]
     kc = len(rows[0])
     w = d.width()
-    count = str(len(text))
-    if not text:
+    per = 2 if lang == "ru" else 1
+    used = len(text.encode("utf-8"))
+    count = "%d/%d" % (len(text), len(text) + (120 - used) // per)
+    if legend:
+        title(d, "1> 2< 3v 4^ 5:выход" if lang == "ru" else "1> 2< 3v 4^ 5:exit")
+    elif not text:
         title(d, ("RE " if re else "to ") + target, count)
     else:
         room = w - d.getTextWidth(count) - 6
         frm = 0
-        while d.getTextWidth(text[frm:] + "_") > room and frm < len(text):
+        while d.getTextWidth(d.translate(text[frm:] + "_", 130)) > room and frm < len(text):
             frm += 1
         d.setTextSize(1); d.setColor(WHITE)
         d.setCursor(w - d.getTextWidth(count) - 1, 0); d.print(count)
-        d.setCursor(0, 0); d.print(text[frm:] + "_")
+        d.setCursor(0, 0); d.print(d.translate(text[frm:] + "_", 130))
         d.drawRect(0, 11, w, 1)
+    up = caps and not sym and caps_due(text)
+    hints = hints_for(lang, text) if not sym else ["", ""]
     for r in range(5):
         y = 13 + r * 10
         if r == 4:
@@ -276,11 +323,24 @@ def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0, re=Fals
             for a, (c0, label) in enumerate(actions):
                 c1 = actions[a + 1][0] if a + 1 < len(actions) else kc
                 x0, x1 = c0 * w // kc, c1 * w // kc
-                cell(d, x0, y, x1 - x0 - 1, label, row == r and cur == a)
+                cell(d, x0, y, x1 - x0 - 1, d.translate(label, 16), row == r and cur == a)
+            continue
+        if r == 3:
+            cur = 0 if col < kc // 2 else 1
+            for k in range(2):
+                x0, x1 = k * w // 2, (k + 1) * w // 2
+                cell(d, x0, y, x1 - x0 - 1, d.translate(hints[k] or "-", 40), row == r and cur == k)
             continue
         for c in range(kc):
             x0, x1 = c * w // kc, (c + 1) * w // kc
-            cell(d, x0, y, x1 - x0, rows[r][c], row == r and col == c)
+            ch = rows[r][c]
+            if up:
+                ch = ch.upper()
+            cell(d, x0, y, x1 - x0, d.translate(ch, 8), row == r and col == c)
+            if c == col and r != row and row < 3:
+                d.fillRect(x0 + 1, y + 8, x1 - x0 - 2, 1)
+        if r == row:
+            d.drawRect(0, y - 1, w, 10)
 
 
 def scr_result(d, target="@Alexey", line="Delivered", retry=False):
@@ -359,12 +419,19 @@ LANG_SCREENS = [
     ("43_write_phrase_sel", "Выбрана фраза", lambda d, l: scr_phrases(d, l, sel=5)),
     ("43b_write_phrases_2", "Фразы, экран 2", lambda d, l: scr_phrases(d, l, sel=7)),
     ("43c_write_phrases_3", "Фразы, экран 3", lambda d, l: scr_phrases(d, l, sel=15)),
-    ("44_write_keys", "Клавиатура: пусто", lambda d, l: scr_keys(d, l)),
-    ("45_write_typing", "Набор текста", lambda d, l: scr_keys(
-        d, l, text={"en": "meet at 18", "ru": "у моста в 18"}[l], row=2, col=3)),
-    ("46_write_send", "Кнопка SEND", lambda d, l: scr_keys(
-        d, l, text={"en": "meet at 18 bridge", "ru": "у моста в 18:00"}[l], row=4,
-        col={"en": 7, "ru": 8}[l])),
+    ("44_write_keys", "Открыта: подсказка кнопок", lambda d, l: scr_keys(d, l, legend=True)),
+    ("44b_write_caps", "Пусто: первая буква заглавная", lambda d, l: scr_keys(d, l)),
+    ("45_write_typing", "Набор: подсказки слов", lambda d, l: scr_keys(
+        d, l, text={"en": "Meet at the bri", "ru": "Буду у мо"}[l], row=1, col=3)),
+    ("45b_write_hint", "Удержание на слове — вставить", lambda d, l: scr_keys(
+        d, l, text={"en": "Meet at the bri", "ru": "Буду у мо"}[l], row=3, col=8)),
+    ("46_write_sym", "#+: цифры и знаки", lambda d, l: scr_keys(
+        d, l, text={"en": "Meet at the bridge ", "ru": "Буду у моста в "}[l], row=0, col=1, sym=True)),
+    ("46b_write_send", "Кнопка SEND", lambda d, l: scr_keys(
+        d, l, text={"en": "Meet at the bridge 18:00", "ru": "Буду у моста в 18:00"}[l], row=4,
+        col={"en": 7, "ru": 9}[l])),
+    ("47_write_freq", "Частотная раскладка (опция)", lambda d, l: scr_keys(
+        d, l, text={"en": "Meet at the bri", "ru": "Буду у мо"}[l], row=1, col=1, freq=True)),
 ]
 
 # answering from the device: name, caption, function(d)
