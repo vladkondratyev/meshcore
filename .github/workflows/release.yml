@@ -43,11 +43,8 @@ jobs:
       - name: Get Build Targets
         id: get-build-targets
         run: |
-          TARGET_LIST=$(
-            /usr/bin/env bash build.sh get-companion-firmwares-to-build
-            /usr/bin/env bash build.sh get-repeater-firmwares-to-build
-            /usr/bin/env bash build.sh get-room-server-firmwares-to-build
-          )
+          # this fork ships companion firmware for Heltec T114, V3 and V4 only
+          TARGET_LIST=$(cat .github/companion-targets.txt)
           JSON_ARRAY=$(echo "$TARGET_LIST" | jq -R -s -c 'split("\n") | map(select(length > 0)) | unique')
           echo "Targets: $(echo "$JSON_ARRAY" | jq length)"
           echo "targets=$JSON_ARRAY" >> $GITHUB_OUTPUT
@@ -101,9 +98,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
-          name: "MeshCore Termin36 ${{ github.ref_name }}"
+          name: "MeshCore Companion ${{ github.ref_name }}"
           body_path: .github/release-notes.md
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
           # every tag has a dash (v1.17.1-0.1.1), only -rc/-beta/-alpha suffixes mark a prerelease
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}

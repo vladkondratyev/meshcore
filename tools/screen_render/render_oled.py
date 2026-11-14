@@ -915,8 +915,8 @@ def to_image_eink(d):
 
 
 def caption_font(size):
-    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
-        for base in (r"C:\Windows\Fonts", "/usr/share/fonts/truetype/dejavu", ""):
+    for name in ("segoeui.ttf", "arial.ttf", "Arial.ttf", "DejaVuSans.ttf"):
+        for base in (r"C:\Windows\Fonts", "/usr/share/fonts/truetype/dejavu", "/System/Library/Fonts/Supplemental", ""):
             try: return ImageFont.truetype(os.path.join(base, name), size)
             except OSError: pass
     return ImageFont.load_default()
