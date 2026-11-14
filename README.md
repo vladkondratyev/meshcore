@@ -69,7 +69,7 @@
 | Число соседей и номер экрана в заголовке страницы Neighbors | — | ✅ `Ник [7] 1/2` |
 | Сообщение прочитано на устройстве | когда телефон забрал его или по кнопке | только по кнопке |
 | Очередь сообщений для телефона | 256 сообщений | ≈500 в той же памяти (T114) |
-| Сборки | все платы, все роли | только companion BLE, USB и Wi‑Fi: T114, V3, V4 |
+| Сборки | все платы, все роли | только companion BLE, USB и Wi‑Fi: T114, V3, V4 и ещё 16 плат с экраном и кнопкой |
 
 <p align="center">
   <img src="docs/screens/ticker/ticker_t114.gif" alt="Бегущая строка на Heltec T114" width="480">
@@ -407,17 +407,45 @@ set lang ru                      set lang en
 
 Готовые файлы — на странице [Releases](https://github.com/vladkondratyev/meshcore/releases/latest).
 
+Основные платы — на них прошивка делалась и проверялась:
+
 | Плата | Bluetooth | USB | Wi‑Fi |
 |---|---|---|---|
 | Heltec T114 | `Heltec_t114_companion_radio_ble` | `Heltec_t114_companion_radio_usb` | — |
 | Heltec V3 | `Heltec_v3_companion_radio_ble` | `Heltec_v3_companion_radio_usb` | `Heltec_v3_companion_radio_wifi` |
 | Heltec V4 | `heltec_v4_companion_radio_ble` | `heltec_v4_companion_radio_usb` | `heltec_v4_companion_radio_wifi` |
 
-Сборки `_ble` подключаются к приложению по Bluetooth, `_usb` — по USB-кабелю, `_wifi` — по Wi‑Fi (TCP). У T114 нет Wi‑Fi, поэтому для него только Bluetooth и USB.
+**Другие платы с экраном и одной кнопкой.** Всё работает так же: бегущая строка, Write, морзе, Sent, настройки. Эти сборки собираются автоматически, но на самих платах не проверялись. Если что-то не так — напишите в Issues.
+
+| Плата | Bluetooth | USB | Wi‑Fi |
+|---|---|---|---|
+| Heltec V2 | `Heltec_v2_companion_radio_ble` | `Heltec_v2_companion_radio_usb` | `Heltec_v2_companion_radio_wifi` |
+| Heltec V4 R8 (OLED) | `heltec_v4_r8_companion_radio_ble` | `heltec_v4_r8_companion_radio_usb` | `heltec_v4_r8_companion_radio_wifi` |
+| Heltec V4 R8 (TFT) | `heltec_v4_r8_tft_companion_radio_ble` | `heltec_v4_r8_tft_companion_radio_usb` | `heltec_v4_r8_tft_companion_radio_wifi` |
+| Heltec Wireless Tracker | `Heltec_Wireless_Tracker_companion_radio_ble` | `Heltec_Wireless_Tracker_companion_radio_usb` | — |
+| Heltec Tracker V2 | `heltec_tracker_v2_companion_radio_ble` | `heltec_tracker_v2_companion_radio_usb` | `heltec_tracker_v2_companion_radio_wifi` |
+| Heltec T190 | `Heltec_T190_companion_radio_ble_` | `Heltec_T190_companion_radio_usb_` | — |
+| LilyGO T3S3 SX1262 | `LilyGo_T3S3_sx1262_companion_radio_ble` | `LilyGo_T3S3_sx1262_companion_radio_usb` | — |
+| LilyGO T3S3 SX1276 | `LilyGo_T3S3_sx1276_companion_radio_ble` | `LilyGo_T3S3_sx1276_companion_radio_usb` | — |
+| LilyGO T-Beam SX1262 | `Tbeam_SX1262_companion_radio_ble` | — | — |
+| LilyGO T-Beam SX1276 | `Tbeam_SX1276_companion_radio_ble` | — | — |
+| LilyGO T-Beam S3 Supreme | `T_Beam_S3_Supreme_SX1262_companion_radio_ble` | — | `T_Beam_S3_Supreme_SX1262_companion_radio_wifi` |
+| LilyGO T-LoRa V2.1-1.6 | — | `LilyGo_TLora_V2_1_1_6_companion_radio_usb` | `LilyGo_TLora_V2_1_1_6_companion_radio_wifi` |
+| RAK4631 (с OLED-модулем) | `RAK_4631_companion_radio_ble` | `RAK_4631_companion_radio_usb` | — |
+| Station G2 | — | `Station_G2_companion_radio_usb` | `Station_G2_companion_radio_wifi` |
+| Nano G2 Ultra | `Nano_G2_Ultra_companion_radio_ble` | `Nano_G2_Ultra_companion_radio_usb` | — |
+| Elecrow ThinkNode M2 | `ThinkNode_M2_companion_radio_ble` | `ThinkNode_M2_companion_radio_usb` | `ThinkNode_M2_companion_radio_wifi` |
+| Seeed Xiao S3 + Wio SX1262 | `Xiao_S3_WIO_companion_radio_ble` | `Xiao_S3_WIO_companion_radio_usb` | `Xiao_S3_WIO_companion_radio_wifi` |
+
+У T-LoRa V2.1 и Station G2 нет Bluetooth-сборки: с новыми функциями она не помещается в память этих плат. Платы на nRF52 (T114, RAK4631, Nano G2 Ultra) прошиваются файлом `.uf2` или `.zip`, остальные (ESP32) — `.bin` и `-merged.bin`, как V3 и V4.
+
+**Какие платы не подходят пока.** Платы с e-ink экраном (Heltec Wireless Paper, E213, E290, T-Echo, ThinkNode M1/M5, Mesh Pocket): клавиатура и морзе требуют быстрого экрана. Платы с джойстиком или трекболом (Wio Tracker L1, T-Deck): у них другое управление, под него нужна своя схема кнопок. На T-Deck есть настоящая клавиатура, для него можно сделать отдельный ввод.
+
+Сборки `_ble` подключаются к приложению по Bluetooth, `_usb` — по USB-кабелю, `_wifi` — по Wi‑Fi (TCP). У T114 и плат на nRF52 нет Wi‑Fi.
 
 Во всех сборках бегущая строка включена сразу, выключается на странице Msg scroll — см. [Как выключить](#как-выключить).
 
-**Wi‑Fi.** Имя сети и пароль в Wi‑Fi-сборке задаются при сборке, с устройства их не поменять. В готовых файлах стоят `myssid` и `mypwd`, как в оригинальном MeshCore: устройство подключится к сети с этими именем и паролем (например, к точке доступа на телефоне). Чтобы подключить его к своей сети, поменяйте `WIFI_SSID` и `WIFI_PWD` в `variants/heltec_v3/platformio.ini` или `variants/heltec_v4/platformio.ini` и соберите прошивку сами. Приложение подключается к устройству по TCP, порт `5000`.
+**Wi‑Fi.** Имя сети и пароль в Wi‑Fi-сборке задаются при сборке, с устройства их не поменять. В готовых файлах стоят `myssid` и `mypwd`, как в оригинальном MeshCore: устройство подключится к сети с этими именем и паролем (например, к точке доступа на телефоне). Чтобы подключить его к своей сети, поменяйте `WIFI_SSID` и `WIFI_PWD` в `platformio.ini` своей платы (например, `variants/heltec_v3/platformio.ini`) и соберите прошивку сами. Приложение подключается к устройству по TCP, порт `5000`.
 
 ### Как обновить
 
