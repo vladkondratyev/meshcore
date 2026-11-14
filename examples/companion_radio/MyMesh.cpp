@@ -234,54 +234,86 @@ void MyMesh::updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, co
   }
 }
 
-bool MyMesh::Frame::isChannelMsg() const {
+#define OQ_SHOWN  0x01   // entry flag: the message is also on the device screen
+
+bool MyMesh::isChannelFrame(const uint8_t* buf) {
   return buf[0] == RESP_CODE_CHANNEL_MSG_RECV || buf[0] == RESP_CODE_CHANNEL_MSG_RECV_V3 ||
          buf[0] == RESP_CODE_CHANNEL_DATA_RECV;
 }
 
+void MyMesh::removeOfflineAt(int off) {
+  int sz = 2 + offline_queue[off];
+  memmove(&offline_queue[off], &offline_queue[off + sz], offline_queue_used - off - sz);
+  offline_queue_used -= sz;
+  offline_queue_len--;
+}
+
+// Returns bit 0 when the frame was queued; the bits above it count evicted
+// channel messages that were also on the device screen.
 int MyMesh::addToOfflineQueue(const uint8_t frame[], int len, bool shown) {
+  if (len <= 0 || len > MAX_FRAME_SIZE) return 0;
+  int need = 2 + len;
   int evicted_shown = 0;
-  if (offline_queue_len >= OFFLINE_QUEUE_SIZE) {
+  while (offline_queue_used + need > OFFLINE_QUEUE_BYTES) {
     MESH_DEBUG_PRINTLN("WARN: offline_queue is full!");
-    int pos = 0;
-    while (pos < offline_queue_len) {
-      if (offline_queue[pos].isChannelMsg()) {
-        if (offline_queue[pos].shown) evicted_shown = 2;
-        for (int i = pos; i < offline_queue_len - 1; i++) { // delete oldest channel msg from queue
-          offline_queue[i] = offline_queue[i + 1];
-        }
-        MESH_DEBUG_PRINTLN("INFO: removed oldest channel message from queue.");
-        offline_queue[offline_queue_len - 1].len = len;
-        offline_queue[offline_queue_len - 1].shown = shown;
-        memcpy(offline_queue[offline_queue_len - 1].buf, frame, len);
-        return 1 | evicted_shown;
-      }
-      pos++;
+    int off = 0;
+    while (off < offline_queue_used && !isChannelFrame(&offline_queue[off + 2])) {
+      off += 2 + offline_queue[off];
     }
-    MESH_DEBUG_PRINTLN("INFO: no channel messages to remove from queue.");
-    return 0;
+    if (off >= offline_queue_used) {
+      MESH_DEBUG_PRINTLN("INFO: no channel messages to remove from queue.");
+      return evicted_shown << 1;
+    }
+    if (offline_queue[off + 1] & OQ_SHOWN) evicted_shown++;
+    removeOfflineAt(off);   // drop the oldest channel message
+    MESH_DEBUG_PRINTLN("INFO: removed oldest channel message from queue.");
   }
-  offline_queue[offline_queue_len].len = len;
-  offline_queue[offline_queue_len].shown = shown;
-  memcpy(offline_queue[offline_queue_len].buf, frame, len);
+  uint8_t* e = &offline_queue[offline_queue_used];
+  e[0] = (uint8_t) len;
+  e[1] = shown ? OQ_SHOWN : 0;
+  memcpy(&e[2], frame, len);
+  offline_queue_used += need;
   offline_queue_len++;
-  return 1;
+  return 1 | (evicted_shown << 1);
 }
 
 int MyMesh::getFromOfflineQueue(uint8_t frame[], bool* was_shown) {
-  if (offline_queue_len > 0) {         // check offline queue
-    size_t len = offline_queue[0].len; // take from top of queue
-    memcpy(frame, offline_queue[0].buf, len);
-    if (was_shown) *was_shown = offline_queue[0].shown;
-
-    offline_queue_len--;
-    for (int i = 0; i < offline_queue_len; i++) { // delete top item from queue
-      offline_queue[i] = offline_queue[i + 1];
-    }
+  if (offline_queue_len > 0) {         // take from top of queue
+    int len = offline_queue[0];
+    memcpy(frame, &offline_queue[2], len);
+    if (was_shown) *was_shown = (offline_queue[1] & OQ_SHOWN) != 0;
+    removeOfflineAt(0);
     return len;
   }
   if (was_shown) *was_shown = false;
   return 0; // queue is empty
+}
+
+int MyMesh::uiSendDirect(const uint8_t* pub_prefix, const char* text) {
+  ContactInfo* recipient = lookupContactByPubKey(pub_prefix, 6);
+  if (recipient == NULL || text[0] == 0) return 0;
+  uint32_t expected_ack = 0, est_timeout = 0;
+  uint32_t ts = getRTCClock()->getCurrentTimeUnique();
+  int result = sendMessage(*recipient, ts, 0, text, expected_ack, est_timeout);
+  if (result == MSG_SEND_FAILED) return 0;
+  _ui_ack = expected_ack;
+  _ui_ack_ok = false;
+  _ui_ack_contact = recipient;
+  _ui_ack_until = futureMillis(est_timeout + 2000);
+  return result == MSG_SEND_SENT_FLOOD ? 2 : 1;
+}
+
+bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
+  ChannelDetails channel;
+  if (text[0] == 0 || !getChannel(channel_idx, channel) || channel.name[0] == 0) return false;
+  uint32_t ts = getRTCClock()->getCurrentTimeUnique();
+  return sendGroupMessage(ts, channel.channel, _prefs.node_name, text, strlen(text));
+}
+
+uint8_t MyMesh::uiAckState() const {
+  if (_ui_ack_ok) return UI_ACK_OK;
+  if (_ui_ack == 0) return UI_ACK_NONE;
+  return millisHasNowPassed(_ui_ack_until) ? UI_ACK_LOST : UI_ACK_WAIT;
 }
 
 float MyMesh::getAirtimeBudgetFactor() const {
@@ -526,6 +558,14 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
+  if (_ui_ack != 0 && memcmp(data, &_ui_ack, 4) == 0) {   // a message sent from the device UI
+    _ui_ack = 0;
+    _ui_ack_ok = true;
+#ifdef DISPLAY_CLASS
+    if (_ui) _ui->notify(UIEventType::ack);
+#endif
+    return _ui_ack_contact;
+  }
   // see if matches any in a table
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
     if (memcmp(data, &expected_ack_table[i].ack, 4) == 0) { // got an ACK from recipient
@@ -581,7 +621,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
 
 #ifdef DISPLAY_CLASS
   // we only want to show text messages on display, not cli data
-  if (_ui && (queued & 2)) _ui->clearTakenMsg();
+  if (_ui) for (int k = queued >> 1; k > 0; k--) _ui->clearTakenMsg();
   if (should_display && (queued & 1) && _ui) {
     _ui->newMsg(path_len, from.name, text, offline_queue_len, false);
     if (!_serial->isConnected()) {
@@ -709,7 +749,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #endif
   }
 #ifdef DISPLAY_CLASS
-  if (_ui && (queued & 2)) _ui->clearTakenMsg();
+  if (_ui) for (int k = queued >> 1; k > 0; k--) _ui->clearTakenMsg();
   if (queued & 1) {
     // Get the channel name from the channel index
     const char *channel_name = "Unknown";
@@ -750,7 +790,7 @@ void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *
   }
   int queued = addToOfflineQueue(out_frame, i, false);
 #ifdef DISPLAY_CLASS
-  if (_ui && (queued & 2)) _ui->clearTakenMsg();
+  if (_ui) for (int k = queued >> 1; k > 0; k--) _ui->clearTakenMsg();
 #endif
 
   if (_serial->isConnected()) {
@@ -1027,6 +1067,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _console_ack_at = 0;
   _cli_rescue = false;
   offline_queue_len = 0;
+  offline_queue_used = 0;
   app_target_ver = 0;
   clearPendingReqs();
   next_ack_idx = 0;

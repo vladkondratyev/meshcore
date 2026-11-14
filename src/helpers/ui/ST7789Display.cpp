@@ -315,6 +315,9 @@ uint16_t ST7789Display::getTextWidth(const char* str) {
 }
 
 void ST7789Display::endFrame() {
+  // The panel is pushed in a single colour: the last one set. A frame that
+  // ends on a black (inverted) element would otherwise go out black on black.
+  setColor(UIColor::primary_txt);
   display.display();
 }
 

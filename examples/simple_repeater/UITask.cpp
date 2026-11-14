@@ -1,4 +1,8 @@
 #include "UITask.h"
+
+#ifndef UI_AUTHOR
+  #define UI_AUTHOR "Termin36"
+#endif
 #include "target.h"
 #include "MyMesh.h"
 #include <helpers/RadioProfiles.h>
@@ -92,7 +96,7 @@ void UITask::renderCurrScreen() {
     _display->drawTextCentered(_display->width() / 2, 35, _version_info);
 
     // node type
-    const char* node_type = "Repeater by Termin36";
+    const char* node_type = "Repeater by " UI_AUTHOR;
     _display->drawTextCentered(_display->width() / 2, 48, node_type);
   } else if (_powering_off_at > 0) {
     // meshcore logo

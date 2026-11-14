@@ -23,6 +23,10 @@
 
 #define LONG_PRESS_MILLIS   1200
 
+#ifndef UI_AUTHOR
+  #define UI_AUTHOR "Termin36"
+#endif
+
 #ifndef UI_RECENT_LIST_SIZE
   #define UI_RECENT_LIST_SIZE 4
 #endif
@@ -56,6 +60,7 @@
 #endif
 
 #include "icons.h"
+#include "ComposeScreen.h"
 
 #ifdef BOOK_READER
   #include "ReaderScreen.h"
@@ -145,7 +150,7 @@ public:
 
     display.setColor(UIColor::secondary_txt);
     display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 48, "by Termin36");
+    display.drawTextCentered(display.width()/2, 48, "by " UI_AUTHOR);
 
     return 1000;
   }
@@ -209,6 +214,7 @@ class HomeScreen : public UIScreen {
 #ifdef BOOK_READER
     BOOKS,
 #endif
+    WRITE,   // write a message on the device
     RECENT,
     NEIGHBORS,
     RADIO,
@@ -224,6 +230,9 @@ class HomeScreen : public UIScreen {
     SENSORS,
 #endif
     SETUP,
+#ifdef UI_MSG_TICKER
+    TICKER,  // running line on/off, right before hibernate
+#endif
     SHUTDOWN,
     Count    // keep as last
   };
@@ -433,6 +442,9 @@ class HomeScreen : public UIScreen {
   // Its value is "1" only while that module is switched on.
   bool isPageVisible(uint8_t page) const {
     if (page == HomePage::SETUP) return _task->isEink();
+#ifdef UI_MSG_TICKER
+    if (page == HomePage::TICKER) return !_task->isEink();
+#endif
 #if ENV_INCLUDE_GPS == 1
     if (page == HomePage::BEACON) return _task->getGPSState();
 #endif
@@ -621,6 +633,13 @@ public:
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 64 - 11, "read: " PRESS_LABEL);
 #endif
+    } else if (_page == HomePage::WRITE) {
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 22, "Write message");
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 34, "channel or contact");
+      display.drawTextCentered(display.width() / 2, 64 - 11, "open: " PRESS_LABEL);
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       int shown = 0;
@@ -1057,6 +1076,19 @@ public:
         display.setColor(UIColor::secondary_txt);
         display.drawTextCentered(display.width() / 2, 52, _setup_edit ? "triple click" : PRESS_LABEL);
       }
+#ifdef UI_MSG_TICKER
+    } else if (_page == HomePage::TICKER) {
+      bool on = _task->tickerEnabled();
+      display.setTextSize(1);
+      display.setColor(UIColor::primary_txt);
+      display.drawTextCentered(display.width() / 2, 18, "Msg scroll");
+      display.setTextSize(2);
+      display.setColor(on ? UIColor::primary_txt : UIColor::warning_txt);
+      display.drawTextCentered(display.width() / 2, 31, on ? "ON" : "OFF");
+      display.setTextSize(1);
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+#endif
     } else if (_page == HomePage::SHUTDOWN) {
       display.setColor(UIColor::corp_blue);
       display.setTextSize(1);
@@ -1184,6 +1216,11 @@ public:
         if (_page == HomePage::FSCAN) {
           _task->showAlert("Freq scan", 800);
         }
+#ifdef UI_MSG_TICKER
+        if (_page == HomePage::TICKER) {
+          _task->showAlert("Msg scroll", 800);
+        }
+#endif
 #if ENV_INCLUDE_GPS == 1
         if (_page == HomePage::BEACON) {
           _task->showAlert("Beacon", 800);
@@ -1247,6 +1284,10 @@ public:
       return true;
     }
 #endif
+    if (c == KEY_ENTER && _page == HomePage::WRITE) {
+      _task->openCompose();
+      return true;
+    }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -1302,6 +1343,12 @@ public:
       _setup_edit = !_setup_edit;
       return true;
     }
+#ifdef UI_MSG_TICKER
+    if (c == KEY_ENTER && _page == HomePage::TICKER) {
+      _task->toggleTicker();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::SHUTDOWN) {
       _shutdown_init = true;  // need to wait for button to be released
       return true;
@@ -1570,7 +1617,9 @@ public:
     }
     StrHelper::strncpy(p->msg, msg, sizeof(p->msg));
 #ifdef UI_MSG_TICKER
-    startTicker(p->origin, p->msg);   // the newest message runs across the screen first
+    if (_task->tickerEnabled()) {
+      startTicker(p->origin, p->msg);   // the newest message runs across the screen first
+    }
 #endif
     // start at the oldest unread; a message that arrives mid-read waits at the end
     if (prev_unread == 0 || head_overwritten) {
@@ -1832,6 +1881,16 @@ public:
   }
 };
 
+void UITask::toggleTicker() {
+#ifdef UI_MSG_TICKER
+  _node_prefs->msg_ticker = _node_prefs->msg_ticker ? 0 : 1;
+  the_mesh.savePrefs();
+  notify(UIEventType::ack);
+  showAlert(_node_prefs->msg_ticker ? "Msg scroll: ON" : "Msg scroll: OFF", 800);
+  _next_refresh = 0;
+#endif
+}
+
 bool UITask::reopenMsgPreview() {
   if (!((MsgPreviewScreen *) msg_preview)->reopen()) return false;
   showMsgPreview();
@@ -1877,9 +1936,16 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef BOOK_READER
   reader = display != NULL ? new ReaderScreen(this, &book_store) : NULL;
 #endif
+  compose = display != NULL ? new ComposeScreen(this) : NULL;
   _idle_since = millis();
   syncDisplayRefresh();
   setCurrScreen(splash);
+}
+
+void UITask::openCompose() {
+  if (!compose) return;
+  ((ComposeScreen*)compose)->enter();
+  setCurrScreen(compose);
 }
 
 void UITask::openReader() {
@@ -1952,7 +2018,7 @@ void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
-  if (msgcount == 0 && curr != clock && !inReader()) {
+  if (msgcount == 0 && curr != clock && !inReader() && !inCompose()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -1963,18 +2029,15 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text, group);
-  if (curr == clock || inReader()) {   // the reader only shows an envelope
+  if (curr == clock || inReader() || inCompose()) {   // reader and writer only show an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
   }
 
   if (_display != NULL) {
-#ifdef UI_MSG_TICKER
-    if (!_display->isOn()) {   // running-line build: every incoming message wakes the screen
-#else
-    if (!_display->isOn() && !hasConnection()) {
-#endif
+    // with the running line on, every incoming message wakes the screen
+    if (!_display->isOn() && (tickerEnabled() || !hasConnection())) {
       _display->turnOn();
     }
     if (_display->isOn()) {
@@ -2071,6 +2134,12 @@ void UITask::loop() {
     c = handleTripleClick(KEY_SELECT);
   }
 #elif defined(PIN_USER_BTN)
+  {
+    // the Write page types on a hold, so the hold is shorter there
+    static int base_long = -1;
+    if (base_long < 0) base_long = user_btn.getLongMillis();
+    user_btn.setLongMillis(inCompose() && base_long > 0 ? COMPOSE_HOLD_MILLIS : base_long);
+  }
   int ev = user_btn.check();
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
@@ -2234,7 +2303,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || inReader()) return c;
+  if (curr == home || inReader() || inCompose()) return c;
   return 0;
 }
 
@@ -2242,7 +2311,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose()) return c;
   toggleBuzzer();
   return 0;
 }

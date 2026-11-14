@@ -60,6 +60,9 @@
 #ifndef OFFLINE_QUEUE_SIZE
 #define OFFLINE_QUEUE_SIZE 16
 #endif
+#ifndef OFFLINE_QUEUE_BYTES   // byte budget of the packed queue
+#define OFFLINE_QUEUE_BYTES (OFFLINE_QUEUE_SIZE * (MAX_FRAME_SIZE + 2))
+#endif
 
 #ifndef BLE_NAME_PREFIX
 #define BLE_NAME_PREFIX "MeshCore-"
@@ -117,6 +120,12 @@ public:
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
   int  getNeighbors(NeighborInfo dest[], int max_num);
   void restoreRadioAfterScan();
+
+  // Messages written on the device itself (Write page)
+  enum { UI_ACK_NONE = 0, UI_ACK_WAIT, UI_ACK_OK, UI_ACK_LOST };
+  int  uiSendDirect(const uint8_t* pub_prefix, const char* text);  // 0 failed, 1 direct, 2 flood
+  bool uiSendChannel(int channel_idx, const char* text);
+  uint8_t uiAckState() const;
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -206,6 +215,11 @@ public:
   bool hasPendingWork() const;
 
 private:
+  uint32_t _ui_ack = 0;              // ack hash of the last message sent from the device UI
+  unsigned long _ui_ack_until = 0;
+  bool _ui_ack_ok = false;
+  ContactInfo* _ui_ack_contact = NULL;
+
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();
@@ -281,15 +295,14 @@ private:
   uint8_t out_frame[MAX_FRAME_SIZE + 1];
   CayenneLPP telemetry;
 
-  struct Frame {
-    uint8_t len;
-    uint8_t buf[MAX_FRAME_SIZE];
-
-    bool isChannelMsg() const;
-    bool shown;   // this frame was also kept on the device screen
-  };
-  int offline_queue_len;
-  Frame offline_queue[OFFLINE_QUEUE_SIZE];
+  // Offline queue packed back to back: [len][flags][len bytes of frame] per entry.
+  // Same RAM as OFFLINE_QUEUE_SIZE full-size frames, but short messages take
+  // only what they need, so far more of them fit.
+  int offline_queue_len;    // entries in the queue
+  int offline_queue_used;   // bytes in use
+  uint8_t offline_queue[OFFLINE_QUEUE_BYTES];
+  static bool isChannelFrame(const uint8_t* buf);
+  void removeOfflineAt(int off);
 
   struct AckTableEntry {
     unsigned long msg_sent;

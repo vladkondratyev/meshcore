@@ -53,6 +53,7 @@ class UITask : public AbstractUITask {
   UIScreen* msg_preview;
   UIScreen* clock;
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
+  UIScreen* compose;   // Write page: message typed on the device
   UIScreen* curr;
   unsigned long _idle_since;
 
@@ -75,6 +76,7 @@ public:
     curr = NULL;
     clock = NULL;
     reader = NULL;
+    compose = NULL;
     _idle_since = 0;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
@@ -82,8 +84,18 @@ public:
   void gotoHomeScreen() { setCurrScreen(home); }
   void openReader();
   bool inReader() const { return curr != NULL && curr == reader; }
+  void openCompose();
+  bool inCompose() const { return curr != NULL && curr == compose; }
   void showMsgPreview() { setCurrScreen(msg_preview); }
   bool reopenMsgPreview();
+  bool tickerEnabled() const {
+#ifdef UI_MSG_TICKER
+    return _node_prefs != NULL && _node_prefs->msg_ticker != 0;
+#else
+    return false;
+#endif
+  }
+  void toggleTicker();
   void keepDisplayAwake();
   void requestRefresh() { _next_refresh = 0; }
   void showAlert(const char* text, int duration_millis);

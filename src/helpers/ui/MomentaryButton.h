@@ -30,5 +30,7 @@ public:
   int check(bool repeat_click=false);  // returns one of BUTTON_EVENT_*
   void cancelClick();  // suppress next BUTTON_EVENT_CLICK (if already in DOWN state)
   uint8_t getPin() { return _pin; }
+  int getLongMillis() const { return _long_millis; }
+  void setLongMillis(int ms) { _long_millis = ms; }
   bool isPressed() const;
 };
