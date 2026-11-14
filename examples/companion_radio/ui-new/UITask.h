@@ -88,6 +88,8 @@ public:
   bool inCompose() const { return curr != NULL && curr == compose; }
   void showMsgPreview() { setCurrScreen(msg_preview); }
   bool reopenMsgPreview();
+  // UI language from `set lang ru|en`: picks the Write keyboard and phrases
+  bool langRu() const { return _node_prefs == NULL || _node_prefs->ui_lang != UI_LANG_EN; }
   bool tickerEnabled() const {
 #ifdef UI_MSG_TICKER
     return _node_prefs != NULL && _node_prefs->msg_ticker != 0;

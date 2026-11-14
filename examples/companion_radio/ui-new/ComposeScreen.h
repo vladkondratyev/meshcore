@@ -28,32 +28,68 @@
 class ComposeScreen : public UIScreen {
   enum Mode : uint8_t { PICK, PHRASE, KEYS, RESULT };
 
-  // keyboard: 4 rows of 10 keys, then one row of wide keys
-  #define KB_COLS   10
+  // keyboard: 4 rows of keys, then one row of wide keys.
+  // English: 10 keys a row. Russian (`set lang ru`): 12 keys a row, all 33 letters.
   #define KB_ROWS   5
   #define KB_ACTION_ROW  4
-  static const char* keyRow(int r) {
-    static const char* const rows[KB_ACTION_ROW] = {
+  #define KB_MAX_COLS  12
+  bool ru() const { return _task->langRu(); }
+  int cols() const { return ru() ? 12 : 10; }
+  // UTF-8 string of one row; every key is one letter
+  const char* keyRow(int r) const {
+    static const char* const en[KB_ACTION_ROW] = {
       "1234567890",
       "qwertyuiop",
       "asdfghjkl?",
       "zxcvbnm,.!",
     };
-    return rows[r];
+    static const char* const rus[KB_ACTION_ROW] = {
+      "1234567890.,",
+      "йцукенгшщзхъ",
+      "фывапролджэ!",
+      "ячсмитьбюё?:",
+    };
+    return ru() ? rus[r] : en[r];
+  }
+  // copies key c of row r (one UTF-8 letter) into buf
+  void keyAt(int r, int c, char* buf) const {
+    const char* p = keyRow(r);
+    for (int i = 0; i < c && *p; i++) {
+      p++;
+      while (((uint8_t)*p & 0xC0) == 0x80) p++;
+    }
+    int n = 0;
+    if (*p) {
+      buf[n++] = *p++;
+      while (((uint8_t)*p & 0xC0) == 0x80 && n < 4) buf[n++] = *p++;
+    }
+    buf[n] = 0;
   }
   enum Action : uint8_t { ACT_SPACE, ACT_DEL, ACT_SEND, ACT_COUNT };
   // first column each wide key covers, and its label
-  static int actionCol(int a) { static const int c[ACT_COUNT + 1] = { 0, 4, 7, KB_COLS }; return c[a]; }
+  int actionCol(int a) const {
+    static const int c10[ACT_COUNT + 1] = { 0, 4, 7, 10 };
+    static const int c12[ACT_COUNT + 1] = { 0, 5, 8, 12 };
+    return ru() ? c12[a] : c10[a];
+  }
   static const char* actionLabel(int a) { static const char* const l[ACT_COUNT] = { "space", "del", "SEND" }; return l[a]; }
-  static int actionAt(int col) {
+  int actionAt(int col) const {
     for (int a = ACT_COUNT - 1; a >= 0; a--) if (col >= actionCol(a)) return a;
     return 0;
   }
 
-  static const char* const* phrases(int& n) {
-    static const char* const p[] = { "ok", "ping", "yes", "no", "hello", "goodbye" };
-    n = sizeof(p) / sizeof(p[0]);
-    return p;
+  // stock phrases; "ping" stays in English in both languages
+  const char* const* phrases(int& n) const {
+    static const char* const en[] = { "ok", "ping", "yes", "no", "hello", "goodbye" };
+    static const char* const rus[] = { "ок", "ping", "да", "нет", "привет", "пока" };
+    n = sizeof(en) / sizeof(en[0]);
+    return ru() ? rus : en;
+  }
+
+  static int utf8Count(const char* s) {
+    int n = 0;
+    for (; *s; s++) if (((uint8_t)*s & 0xC0) != 0x80) n++;
+    return n;
   }
 
   UITask* _task;
@@ -214,7 +250,7 @@ class ComposeScreen : public UIScreen {
     int np;
     const char* const* p = phrases(np);
     int half = display.width() / 2;
-    drawCell(display, 2, 15, display.width() - 4, "keyboard", _sel == 0, true);
+    drawCell(display, 2, 15, display.width() - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
     for (int i = 0; i < np; i++) {
       drawCell(display, (i % 2) * half + 2, 15 + (i / 2 + 1) * 12, half - 4, p[i], _sel == i + 1, true);
     }
@@ -223,7 +259,7 @@ class ComposeScreen : public UIScreen {
   void drawKeys(DisplayDriver& display) {
     // text line: the tail of the text with a cursor, or the recipient while empty
     char count[8];
-    snprintf(count, sizeof(count), "%d", _len);
+    snprintf(count, sizeof(count), "%d", utf8Count(_text));
     if (_len == 0) {
       char name[48], line[56];
       targetName(_target, name, sizeof(name));
@@ -237,6 +273,7 @@ class ComposeScreen : public UIScreen {
         snprintf(tail, sizeof(tail), "%s_", &_text[from]);
         if (display.getTextWidth(tail) <= room || from >= _len) break;
         from++;
+        while (from < _len && ((uint8_t)_text[from] & 0xC0) == 0x80) from++;   // whole letters only
       }
       display.setTextSize(1);
       display.setColor(UIColor::corp_blue);
@@ -250,20 +287,21 @@ class ComposeScreen : public UIScreen {
     }
 
     int w = display.width();
+    int kc = cols();
     for (int r = 0; r < KB_ROWS; r++) {
       int y = 13 + r * 10;
       if (r == KB_ACTION_ROW) {
         int cur = actionAt(_col);
         for (int a = 0; a < ACT_COUNT; a++) {
-          int x0 = actionCol(a) * w / KB_COLS, x1 = actionCol(a + 1) * w / KB_COLS;
+          int x0 = actionCol(a) * w / kc, x1 = actionCol(a + 1) * w / kc;
           drawCell(display, x0, y, x1 - x0 - 1, actionLabel(a), _row == r && cur == a);
         }
         continue;
       }
-      const char* keys = keyRow(r);
-      for (int c = 0; c < KB_COLS; c++) {
-        char cell[2] = { keys[c], 0 };
-        int x0 = c * w / KB_COLS, x1 = (c + 1) * w / KB_COLS;
+      for (int c = 0; c < kc; c++) {
+        char cell[5];
+        keyAt(r, c, cell);
+        int x0 = c * w / kc, x1 = (c + 1) * w / kc;
         drawCell(display, x0, y, x1 - x0, cell, _row == r && _col == c);
       }
     }
@@ -295,7 +333,9 @@ class ComposeScreen : public UIScreen {
           if (_len > 0 && _len < COMPOSE_MAX_TEXT && _text[_len - 1] != ' ') { _text[_len++] = ' '; _text[_len] = 0; }
           break;
         case ACT_DEL:
-          if (_len > 0) _text[--_len] = 0;
+          while (_len > 0 && ((uint8_t)_text[_len - 1] & 0xC0) == 0x80) _len--;   // continuation bytes
+          if (_len > 0) _len--;
+          _text[_len] = 0;
           break;
         default:
           while (_len > 0 && _text[_len - 1] == ' ') _text[--_len] = 0;
@@ -304,12 +344,15 @@ class ComposeScreen : public UIScreen {
       }
       return;
     }
-    if (_len >= COMPOSE_MAX_TEXT) {
+    char key[5];
+    keyAt(_row, _col, key);
+    int kl = strlen(key);
+    if (_len + kl > COMPOSE_MAX_TEXT) {
       _task->showAlert("Too long", 800);
       return;
     }
-    _text[_len++] = keyRow(_row)[_col];
-    _text[_len] = 0;
+    memcpy(&_text[_len], key, kl + 1);
+    _len += kl;
   }
 
 public:
@@ -392,14 +435,14 @@ public:
         int a = (actionAt(_col) + 1) % ACT_COUNT;
         _col = actionCol(a);
       } else {
-        step(_col, KB_COLS, 1);
+        step(_col, cols(), 1);
       }
     } else if (c == KEY_LEFT) {
       if (_row == KB_ACTION_ROW) {
         int a = (actionAt(_col) + ACT_COUNT - 1) % ACT_COUNT;
         _col = actionCol(a);
       } else {
-        step(_col, KB_COLS, -1);
+        step(_col, cols(), -1);
       }
     } else if (c == KEY_PREV || c == KEY_DOWN) {
       step(_row, KB_ROWS, 1);

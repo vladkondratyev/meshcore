@@ -1,5 +1,4 @@
 Heltec_t114_companion_radio_ble
-Heltec_t114_companion_radio_ble_ticker
 Heltec_t114_companion_radio_usb
 Heltec_v3_companion_radio_ble
 Heltec_v3_companion_radio_usb

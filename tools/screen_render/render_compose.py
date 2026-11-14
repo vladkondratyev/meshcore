@@ -25,9 +25,17 @@ PAGES = ["FIRST", "WRITE", "RECENT", "NEIGHBORS", "RADIO", "POWER", "SCAN", "FSC
          "BLUETOOTH", "GPS", "BEACON", "TICKER", "SHUTDOWN"]
 
 TARGETS = ["#public", "#Squad North", "@Alexey", "@Base Camp", "@Fox"]
-PHRASES = ["ok", "ping", "yes", "no", "hello", "goodbye"]
-KEY_ROWS = ["1234567890", "qwertyuiop", "asdfghjkl?", "zxcvbnm,.!"]
-ACTIONS = [(0, "space"), (4, "del"), (7, "SEND")]
+# Layouts follow `set lang ru|en` (ru is the default).
+LANG = {
+    "en": {"phrases": ["ok", "ping", "yes", "no", "hello", "goodbye"],
+           "rows": ["1234567890", "qwertyuiop", "asdfghjkl?", "zxcvbnm,.!"],
+           "actions": [(0, "space"), (4, "del"), (7, "SEND")],
+           "keyboard": "keyboard"},
+    "ru": {"phrases": ["ок", "ping", "да", "нет", "привет", "пока"],
+           "rows": ["1234567890.,", "йцукенгшщзхъ", "фывапролджэ!", "ячсмитьбюё?:"],
+           "actions": [(0, "space"), (5, "del"), (8, "SEND")],
+           "keyboard": "клавиатура"},
+}
 
 
 class Dev(Oled):
@@ -83,16 +91,20 @@ def scr_pick(d, sel=1):
         d.setColor(WHITE)
 
 
-def scr_phrases(d, target="#Squad North", sel=0):
+def scr_phrases(d, lang="en", target="#Squad North", sel=0):
+    L = LANG[lang]
     title(d, target)
     w = d.width()
     half = w // 2
-    cell(d, 2, 15, w - 4, "keyboard", sel == 0, True)
-    for i, p in enumerate(PHRASES):
+    cell(d, 2, 15, w - 4, L["keyboard"], sel == 0, True)
+    for i, p in enumerate(L["phrases"]):
         cell(d, (i % 2) * half + 2, 15 + (i // 2 + 1) * 12, half - 4, p, sel == i + 1, True)
 
 
-def scr_keys(d, target="#Squad North", text="", row=1, col=0):
+def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0):
+    L = LANG[lang]
+    rows, actions = L["rows"], L["actions"]
+    kc = len(rows[0])
     w = d.width()
     count = str(len(text))
     if not text:
@@ -109,15 +121,15 @@ def scr_keys(d, target="#Squad North", text="", row=1, col=0):
     for r in range(5):
         y = 13 + r * 10
         if r == 4:
-            cur = max(a for a, (c, _) in enumerate(ACTIONS) if col >= c)
-            for a, (c0, label) in enumerate(ACTIONS):
-                c1 = ACTIONS[a + 1][0] if a + 1 < len(ACTIONS) else 10
-                x0, x1 = c0 * w // 10, c1 * w // 10
+            cur = max(a for a, (c, _) in enumerate(actions) if col >= c)
+            for a, (c0, label) in enumerate(actions):
+                c1 = actions[a + 1][0] if a + 1 < len(actions) else kc
+                x0, x1 = c0 * w // kc, c1 * w // kc
                 cell(d, x0, y, x1 - x0 - 1, label, row == r and cur == a)
             continue
-        for c in range(10):
-            x0, x1 = c * w // 10, (c + 1) * w // 10
-            cell(d, x0, y, x1 - x0, KEY_ROWS[r][c], row == r and col == c)
+        for c in range(kc):
+            x0, x1 = c * w // kc, (c + 1) * w // kc
+            cell(d, x0, y, x1 - x0, rows[r][c], row == r and col == c)
 
 
 def scr_result(d, target="@Alexey", line="Delivered"):
@@ -142,13 +154,20 @@ def scr_ticker_page(d, on=True):
 WRITE_SCREENS = [
     ("40_write_page", "Страница Write", scr_write_page),
     ("41_write_pick", "Кому: канал или избранный", scr_pick),
-    ("42_write_phrases", "Клавиатура и готовые фразы", scr_phrases),
-    ("43_write_phrase_sel", "Фраза «hello»", lambda d: scr_phrases(d, sel=5)),
-    ("44_write_keys", "Клавиатура: пусто", scr_keys),
-    ("45_write_typing", "Набор текста", lambda d: scr_keys(d, text="meet at 18", row=2, col=3)),
-    ("46_write_send", "Кнопка SEND", lambda d: scr_keys(d, text="meet at 18 bridge", row=4, col=7)),
     ("47_write_channel", "Ушло в канал", lambda d: scr_result(d, "#Squad North", "Sent to channel")),
     ("48_write_delivered", "Личное: доставлено", scr_result),
+]
+
+# Screens that depend on `set lang`: name, caption, function(d, lang)
+LANG_SCREENS = [
+    ("42_write_phrases", "Клавиатура и готовые фразы", lambda d, l: scr_phrases(d, l)),
+    ("43_write_phrase_sel", "Выбрана фраза", lambda d, l: scr_phrases(d, l, sel=5)),
+    ("44_write_keys", "Клавиатура: пусто", lambda d, l: scr_keys(d, l)),
+    ("45_write_typing", "Набор текста", lambda d, l: scr_keys(
+        d, l, text={"en": "meet at 18", "ru": "у моста в 18"}[l], row=2, col=3)),
+    ("46_write_send", "Кнопка SEND", lambda d, l: scr_keys(
+        d, l, text={"en": "meet at 18 bridge", "ru": "у моста в 18:00"}[l], row=4,
+        col={"en": 7, "ru": 8}[l])),
 ]
 
 TICKER_SCREENS = [
@@ -272,8 +291,19 @@ def main():
         im = to_image(d)
         im.save(os.path.join(out, "write", fname + ".png"))
         items.append((label, im))
-    sheet(items, 3, "Write — сообщение с устройства (OLED 128×64, T114)").save(
+    sheet(items, 4, "Write — сообщение с устройства (OLED 128×64, T114)").save(
         os.path.join(out, "gallery_write.png"))
+
+    titles = {"ru": "Русский: set lang ru (по умолчанию)", "en": "English: set lang en"}
+    for lang in ("ru", "en"):
+        litems = []
+        for fname, label, fn in LANG_SCREENS:
+            d = Dev(); fn(d, lang)
+            im = to_image(d)
+            im.save(os.path.join(out, "write", "%s_%s.png" % (fname, lang)))
+            litems.append((label, im))
+        sheet(litems, 3, "Write — " + titles[lang]).save(
+            os.path.join(out, "gallery_write_%s.png" % lang))
 
     titems = []
     for fname, label, fn in TICKER_SCREENS:

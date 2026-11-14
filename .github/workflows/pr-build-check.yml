@@ -27,7 +27,6 @@ jobs:
         environment:
           # companion builds of this fork: Heltec T114, V3, V4
           - Heltec_t114_companion_radio_ble
-          - Heltec_t114_companion_radio_ble_ticker
           - Heltec_t114_companion_radio_usb
           - Heltec_v3_companion_radio_ble
           - Heltec_v3_companion_radio_usb
