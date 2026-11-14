@@ -562,10 +562,23 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
     _ui_ack = 0;
     _ui_ack_ok = true;
 #ifdef DISPLAY_CLASS
-    if (_ui) _ui->notify(UIEventType::ack);
+    if (_ui) {
+      uint8_t key[6];
+      _ui->onUiAck(data, key);   // marks it in the Sent list
+      _ui->notify(UIEventType::ack);
+    }
 #endif
     return _ui_ack_contact;
   }
+#ifdef DISPLAY_CLASS
+  {   // an earlier message from the device UI, confirmed late
+    uint8_t key[6];
+    if (_ui && _ui->onUiAck(data, key)) {
+      _ui->notify(UIEventType::ack);
+      return lookupContactByPubKey(key, 6);
+    }
+  }
+#endif
   // see if matches any in a table
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
     if (memcmp(data, &expected_ack_table[i].ack, 4) == 0) { // got an ACK from recipient

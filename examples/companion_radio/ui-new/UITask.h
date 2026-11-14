@@ -21,16 +21,7 @@
 
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
-
-// a recipient on the Write page: a device channel or a contact (pub key prefix)
-struct ComposeTarget {
-  uint8_t is_ch;
-  uint8_t ch;
-  uint8_t key[6];
-  bool same(const ComposeTarget& o) const {
-    return is_ch == o.is_ch && (is_ch ? ch == o.ch : memcmp(key, o.key, 6) == 0);
-  }
-};
+#include "SentLog.h"
 
 class UITask : public AbstractUITask {
   DisplayDriver* _display;
@@ -64,6 +55,8 @@ class UITask : public AbstractUITask {
   UIScreen* clock;
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
   UIScreen* compose;   // Write page: message typed on the device
+  UIScreen* sent;      // Sent page: what the device sent, to whom, in reply to what
+  SentLog _sent_log;
   UIScreen* curr;
   unsigned long _idle_since;
 
@@ -87,6 +80,7 @@ public:
     clock = NULL;
     reader = NULL;
     compose = NULL;
+    sent = NULL;
     _idle_since = 0;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
@@ -95,7 +89,11 @@ public:
   void openReader();
   bool inReader() const { return curr != NULL && curr == reader; }
   void openCompose();
-  bool openReply(const ComposeTarget& to);
+  bool openReply(const ComposeTarget& to, const char* re = NULL);
+  bool openWriteTo(const ComposeTarget& to);
+  void openSent();
+  bool inSent() const { return curr != NULL && curr == sent; }
+  SentLog& sentLog() { return _sent_log; }
   int  getUnreadCount() const;
   bool inCompose() const { return curr != NULL && curr == compose; }
   void showMsgPreview() { setCurrScreen(msg_preview); }
@@ -164,6 +162,7 @@ public:
   void clearTakenMsg() override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, bool group) override;
   void notify(UIEventType t = UIEventType::none) override;
+  bool onUiAck(const uint8_t* ack, uint8_t* key_out) override;
   void loop() override;
 
   void shutdown(bool restart = false);

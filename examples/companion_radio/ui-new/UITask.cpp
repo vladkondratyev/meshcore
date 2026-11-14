@@ -61,6 +61,7 @@
 
 #include "icons.h"
 #include "ComposeScreen.h"
+#include "SentScreen.h"
 
 #ifdef BOOK_READER
   #include "ReaderScreen.h"
@@ -215,6 +216,7 @@ class HomeScreen : public UIScreen {
     BOOKS,
 #endif
     WRITE,   // write a message on the device
+    SENT,    // what the device sent: to whom, in reply to what, delivered or not
     RECENT,
     NEIGHBORS,
     RADIO,
@@ -680,6 +682,24 @@ public:
       display.drawTextCentered(display.width() / 2, 22, "Write message");
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 34, "channel or contact");
+      display.drawTextCentered(display.width() / 2, 64 - 11, "open: " PRESS_LABEL);
+    } else if (_page == HomePage::SENT) {
+      SentLog& log = _task->sentLog();
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(1);
+      char line[32];
+      snprintf(line, sizeof(line), "Sent: %d", log.count());
+      display.drawTextCentered(display.width() / 2, 22, line);
+      display.setColor(UIColor::secondary_txt);
+      SentEntry* e = log.get(0);
+      if (e) {
+        int replies = 0;
+        for (int i = 0; i < log.count(); i++) if (log.get(i)->re[0]) replies++;
+        snprintf(line, sizeof(line), "replies: %d", replies);
+        display.drawTextCentered(display.width() / 2, 34, line);
+      } else {
+        display.drawTextCentered(display.width() / 2, 34, "from this device");
+      }
       display.drawTextCentered(display.width() / 2, 64 - 11, "open: " PRESS_LABEL);
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
@@ -1328,6 +1348,10 @@ public:
       _task->openCompose();
       return true;
     }
+    if (c == KEY_ENTER && _page == HomePage::SENT) {
+      _task->openSent();
+      return true;
+    }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -1801,6 +1825,8 @@ public:
     }
     if (c == KEY_ENTER) {   // hold: reply to the message on screen
       ComposeScreen::Target to = unread[head].from;
+      char re[sizeof(unread[head].msg)];
+      StrHelper::strncpy(re, unread[head].msg, sizeof(re));   // before head moves on
       if (num_unread > 0) {     // it counts as read, like a click
         bool was_group = unread[head].group;
         num_unread--;
@@ -1811,7 +1837,7 @@ public:
           resetPage();
         }
       }
-      if (!_task->openReply(to)) {
+      if (!_task->openReply(to, re)) {
         _task->showAlert("Can't reply", 1000);
         if (num_unread == 0) _task->gotoHomeScreen();
       }
@@ -1999,6 +2025,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   reader = display != NULL ? new ReaderScreen(this, &book_store) : NULL;
 #endif
   compose = display != NULL ? new ComposeScreen(this) : NULL;
+  sent = display != NULL ? new SentScreen(this) : NULL;
   _idle_since = millis();
   syncDisplayRefresh();
   setCurrScreen(splash);
@@ -2010,10 +2037,28 @@ void UITask::openCompose() {
   setCurrScreen(compose);
 }
 
-bool UITask::openReply(const ComposeScreen::Target& to) {
+bool UITask::openReply(const ComposeTarget& to, const char* re) {
   if (!compose) return false;
-  if (!((ComposeScreen*)compose)->enterReply(to)) return false;
+  if (!((ComposeScreen*)compose)->enterTo(to, re)) return false;
   setCurrScreen(compose);
+  return true;
+}
+
+bool UITask::openWriteTo(const ComposeTarget& to) {
+  return openReply(to, NULL);
+}
+
+void UITask::openSent() {
+  if (!sent) return;
+  ((SentScreen*)sent)->enter();
+  setCurrScreen(sent);
+}
+
+bool UITask::onUiAck(const uint8_t* ack, uint8_t* key_out) {
+  SentEntry* e = _sent_log.ack(ack);
+  if (e == NULL) return false;
+  memcpy(key_out, e->to.key, 6);
+  if (curr == sent) _next_refresh = 100;
   return true;
 }
 
@@ -2093,7 +2138,7 @@ void UITask::msgRead(int msgcount) {
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
   // an open message window stays open: only button presses read it
-  if (msgcount == 0 && curr != clock && curr != msg_preview && !inReader() && !inCompose()) {
+  if (msgcount == 0 && curr != clock && curr != msg_preview && !inReader() && !inCompose() && !inSent()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -2104,7 +2149,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text, group);
-  if (curr == clock || inReader() || inCompose()) {   // reader and writer only show an envelope
+  if (curr == clock || inReader() || inCompose() || inSent()) {   // reader, writer and Sent only show an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
@@ -2378,7 +2423,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent()) return c;
   return 0;
 }
 
@@ -2386,7 +2431,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent()) return c;
   toggleBuzzer();
   return 0;
 }

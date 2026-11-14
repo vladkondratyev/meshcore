@@ -45,5 +45,7 @@ public:
   virtual void clearTakenMsg() {}
   virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, bool group) = 0;
   virtual void notify(UIEventType t = UIEventType::none) = 0;
+  // an ack for a message sent from the device UI; key_out gets the contact prefix (6 bytes)
+  virtual bool onUiAck(const uint8_t* ack, uint8_t* key_out) { return false; }
   virtual void loop() = 0;
 };

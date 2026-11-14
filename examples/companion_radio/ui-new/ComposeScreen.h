@@ -124,6 +124,7 @@ private:
   int _len = 0;
   int _row = 1, _col = 0;   // keyboard cursor; on the action row _col is the column it came from
 
+  char _re[SENT_RE_LEN];    // replying to this message; "" when writing anew
   int _sent = 0;            // 0 failed, 1 direct, 2 flood, 3 channel
   unsigned long _result_at = 0;
 
@@ -215,7 +216,35 @@ private:
     if (n > 0) v = (v + d + n) % n;
   }
 
-  void send() {
+  bool replying() const { return _re[0] != 0; }
+
+  // recipient as the title shows it: "RE @Alexey" while answering a message
+  void titleName(char* buf, size_t n) {
+    char name[48];
+    targetName(_target, name, sizeof(name));
+    if (replying()) snprintf(buf, n, "RE %s", name);
+    else StrHelper::strncpy(buf, name, n);
+  }
+
+  // every send goes to the Sent list; sending again updates the same entry
+  void logSent(bool again) {
+    SentLog& log = _task->sentLog();
+    SentEntry* e = (again && log.count() > 0) ? log.get(0) : log.add();
+    e->at = millis();
+    e->to = _t[_target];
+    e->kind = (uint8_t)_sent;
+    e->delivered = false;
+    e->ack = 0;
+    e->ack_until = 0;
+    if (_sent == 1 || _sent == 2) {
+      e->ack = the_mesh.uiLastAck();
+      e->ack_until = the_mesh.uiLastAckUntil();
+    }
+    StrHelper::strncpy(e->re, _re, sizeof(e->re));
+    StrHelper::strncpy(e->text, _text, sizeof(e->text));
+  }
+
+  void send(bool again = false) {
     if (_len == 0 || _target < 0) return;
     _text[_len] = 0;
     if (isChannel(_target)) {
@@ -224,6 +253,7 @@ private:
       _sent = the_mesh.uiSendDirect(_t[_target].key, _text);
     }
     if (_sent) rememberRecent(_t[_target]);
+    logSent(again);
     _task->notify(_sent ? UIEventType::ack : UIEventType::none);
     _mode = RESULT;
     _result_at = millis();
@@ -246,8 +276,8 @@ private:
   }
 
   void drawTargetTitle(DisplayDriver& display) {
-    char name[48];
-    if (_target >= 0) targetName(_target, name, sizeof(name));
+    char name[56];
+    if (_target >= 0) titleName(name, sizeof(name));
     else strcpy(name, "Write to:");
     drawTitle(display, name, NULL);
   }
@@ -315,8 +345,8 @@ private:
     int np;
     const char* const* p = phrases(np);
     bool second = _sel > PHRASES_P1;
-    char name[48];
-    targetName(_target, name, sizeof(name));
+    char name[56];
+    titleName(name, sizeof(name));
     drawTitle(display, name, second ? "2/2" : "1/2");
     int half = display.width() / 2;
     if (!second) {
@@ -337,9 +367,9 @@ private:
     char count[8];
     snprintf(count, sizeof(count), "%d", utf8Count(_text));
     if (_len == 0) {
-      char name[48], line[56];
+      char name[48], line[64];
       targetName(_target, name, sizeof(name));
-      snprintf(line, sizeof(line), "to %s", name);
+      snprintf(line, sizeof(line), "%s %s", replying() ? "RE" : "to", name);
       drawTitle(display, line, count);
     } else {
       int room = display.width() - display.getTextWidth(count) - 6;
@@ -439,7 +469,7 @@ private:
   }
 
 public:
-  ComposeScreen(UITask* task) : _task(task) { _text[0] = 0; }
+  ComposeScreen(UITask* task) : _task(task) { _text[0] = 0; _re[0] = 0; }
 
   void enter() {
     loadTargets();
@@ -448,13 +478,27 @@ public:
     _target = -1;
     _len = 0;
     _text[0] = 0;
+    _re[0] = 0;
   }
 
-  // reply to an incoming message: the sender (or its channel) is the recipient
-  // even when it is not a favourite; the phrases come up first
-  bool enterReply(const Target& t) {
+  // write to a given recipient, even one that is not a favourite; the phrases
+  // come up first. re = the incoming message being answered, or NULL.
+  bool enterTo(const Target& t, const char* re) {
     if (!exists(t)) return false;
     enter();
+    if (re && re[0]) {
+      StrHelper::strncpy(_re, re, sizeof(_re));
+      if (strlen(re) >= sizeof(_re)) {   // cut short: drop a broken last letter
+        int n = strlen(_re);
+        int lead = n;
+        while (lead > 0 && ((uint8_t)_re[lead - 1] & 0xC0) == 0x80) lead--;
+        if (lead > 0 && ((uint8_t)_re[lead - 1] & 0x80)) {   // a multi-byte letter starts at lead-1
+          uint8_t b = (uint8_t)_re[lead - 1];
+          int need = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
+          if (n - (lead - 1) < need) _re[lead - 1] = 0;
+        }
+      }
+    }
     int i = findTarget(t);
     if (i < 0) {
       if (_num_t >= COMPOSE_MAX_TARGETS) _num_t--;
@@ -494,7 +538,7 @@ public:
     bool back = c == KEY_SELECT || c == KEY_CANCEL;
 
     if (_mode == RESULT && ok && canRetry() && _len > 0) {
-      send();   // same text, same recipient
+      send(true);   // same text, same recipient
       return true;
     }
     if (c == KEY_QUAD || _mode == RESULT) {
@@ -521,6 +565,7 @@ public:
         _mode = PICK;
         _sel = _target;
         _target = -1;
+        _re[0] = 0;   // another recipient is not a reply
       } else if (ok) {
         if (_sel == 0) {
           _mode = KEYS;
