@@ -46,6 +46,9 @@ public:
   File openRead(const char* filename);
   File openRead(FILESYSTEM* fs, const char* filename);
   bool removeFile(const char* filename);
+  // small fixed-size records on the primary filesystem
+  bool loadRaw(const char* filename, void* buf, size_t len);
+  bool saveRaw(const char* filename, const void* buf, size_t len);
   bool removeFile(FILESYSTEM* fs, const char* filename);
   uint32_t getStorageUsedKb() const;
   uint32_t getStorageTotalKb() const;

@@ -303,6 +303,29 @@ int MyMesh::uiSendDirect(const uint8_t* pub_prefix, const char* text) {
   return result == MSG_SEND_SENT_FLOOD ? 2 : 1;
 }
 
+const char* MyMesh::uiPhrase(int i) const {
+  if (i < 0 || i >= UI_PHRASE_COUNT) return "";
+  if (_phrase_ovr[i][0]) return _phrase_ovr[i];
+  return _prefs.ui_lang == UI_LANG_EN ? UI_PHRASES_EN[i] : UI_PHRASES_RU[i];
+}
+
+void MyMesh::setUiPhrase(int i, const char* text) {
+  if (i < 0 || i >= UI_PHRASE_COUNT) return;
+  char* d = _phrase_ovr[i];
+  int n = 0;
+  // whole UTF-8 letters only
+  while (text[n]) {
+    uint8_t b = (uint8_t)text[n];
+    int l = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
+    if (n + l > UI_PHRASE_LEN - 1) break;
+    n += l;
+  }
+  memcpy(d, text, n);
+  d[n] = 0;
+  while (n > 0 && d[n - 1] == ' ') d[--n] = 0;
+  _store->saveRaw("/phrases", _phrase_ovr, sizeof(_phrase_ovr));
+}
+
 bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
   ChannelDetails channel;
   if (text[0] == 0 || !getChannel(channel_idx, channel) || channel.name[0] == 0) return false;
@@ -1167,6 +1190,12 @@ void MyMesh::begin(bool has_display) {
 
   // load persisted prefs
   _store->loadPrefs(_prefs);
+  memset(_phrase_ovr, 0, sizeof(_phrase_ovr));
+  if (_store->loadRaw("/phrases", _phrase_ovr, sizeof(_phrase_ovr))) {
+    for (int i = 0; i < UI_PHRASE_COUNT; i++) _phrase_ovr[i][UI_PHRASE_LEN - 1] = 0;
+  } else {
+    memset(_phrase_ovr, 0, sizeof(_phrase_ovr));
+  }
   sensors.node_lat = _prefs.node_lat;
   sensors.node_lon = _prefs.node_lon;
 
@@ -2521,7 +2550,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -2570,6 +2599,38 @@ void MyMesh::runCLICommand(char* command, Print& out) {
     } else if (strcmp(command, "clock") == 0) {
       snprintf(line, sizeof(line), "%u\n", (unsigned)getRTCClock()->getCurrentTime());
       out.print(line);
+    } else if (memcmp(command, "phrases", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
+      // phrases [screen]: one screen at a time, a console reply is short
+      int pages = 1 + (UI_PHRASE_COUNT - UI_PHRASES_P1 + UI_PHRASES_PER - 1) / UI_PHRASES_PER;
+      int page = atoi(&command[7]);
+      if (page < 1 || page > pages) page = 1;
+      int from = page == 1 ? 0 : UI_PHRASES_P1 + (page - 2) * UI_PHRASES_PER;
+      int to = page == 1 ? UI_PHRASES_P1 : from + UI_PHRASES_PER;
+      if (to > UI_PHRASE_COUNT) to = UI_PHRASE_COUNT;
+      snprintf(line, sizeof(line), "screen %d/%d (* = yours)\n", page, pages);
+      out.print(line);
+      for (int i = from; i < to; i++) {
+        snprintf(line, sizeof(line), "%d%s %s\n", i + 1, uiPhraseCustom(i) ? "*" : "", uiPhrase(i));
+        out.print(line);
+      }
+    } else if (memcmp(command, "set ", 4) == 0 && memcmp(&command[4], "phrase", 6) == 0 &&
+               (command[10] == 0 || command[10] == ' ')) {
+      // set phrase N text | set phrase N (back to the stock phrase)
+      const char* arg = command[10] ? &command[11] : "";
+      while (*arg == ' ') arg++;
+      int n = 0;
+      bool digits = *arg >= '0' && *arg <= '9';
+      while (*arg >= '0' && *arg <= '9') n = n * 10 + (*arg++ - '0');
+      if (!digits || n < 1 || n > UI_PHRASE_COUNT || (*arg != 0 && *arg != ' ')) {
+        snprintf(line, sizeof(line), "  Error: set phrase 1..%d [text]\n", UI_PHRASE_COUNT);
+        out.print(line);
+      } else {
+        while (*arg == ' ') arg++;
+        setUiPhrase(n - 1, arg);
+        snprintf(line, sizeof(line), "  > phrase %d is %s%s\n", n, uiPhrase(n - 1),
+                 uiPhraseCustom(n - 1) ? "" : " (stock)");
+        out.print(line);
+      }
     } else if (memcmp(command, "set ", 4) == 0) {
       const char* config = &command[4];
       if (memcmp(config, "clock.node", 10) == 0 && (config[10] == 0 || config[10] == ' ')) {

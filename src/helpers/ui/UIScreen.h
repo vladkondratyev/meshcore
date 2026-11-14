@@ -14,6 +14,7 @@
 #define KEY_PREV           0xF2
 #define KEY_CONTEXT_MENU   0xF3
 #define KEY_QUAD           0xF4
+#define KEY_PENTA          0xF5   // five clicks
 
 class UIScreen {
 protected:

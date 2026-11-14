@@ -23,6 +23,7 @@
 
 #include "DataStore.h"
 #include "NodePrefs.h"
+#include "UiPhrases.h"
 
 #include <RTClib.h>
 #include <helpers/ArduinoHelpers.h>
@@ -126,6 +127,10 @@ public:
   int  uiSendDirect(const uint8_t* pub_prefix, const char* text);  // 0 failed, 1 direct, 2 flood
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
+  // Write page phrases: the console replaces any of them (set phrase N text)
+  const char* uiPhrase(int i) const;
+  bool uiPhraseCustom(int i) const { return i >= 0 && i < UI_PHRASE_COUNT && _phrase_ovr[i][0] != 0; }
+  void setUiPhrase(int i, const char* text);
   uint32_t uiLastAck() const { return _ui_ack; }
   unsigned long uiLastAckUntil() const { return _ui_ack_until; }
   // sender of the message last passed to the UI, so the device can reply to it
@@ -221,6 +226,7 @@ public:
   bool hasPendingWork() const;
 
 private:
+  char _phrase_ovr[UI_PHRASE_COUNT][UI_PHRASE_LEN];   // "" = the stock phrase
   uint32_t _ui_ack = 0;              // ack hash of the last message sent from the device UI
   unsigned long _ui_ack_until = 0;
   bool _ui_ack_ok = false;

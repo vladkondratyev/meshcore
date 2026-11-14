@@ -2271,6 +2271,8 @@ void UITask::loop() {
     c = handleTripleClick(KEY_SELECT);
   } else if (ev == BUTTON_EVENT_QUAD_CLICK) {
     c = handleQuadClick(KEY_QUAD);
+  } else if (ev == BUTTON_EVENT_PENTA_CLICK) {   // only the Write keyboard tells five from four
+    c = handleQuadClick(inCompose() ? KEY_PENTA : KEY_QUAD);
   }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
@@ -2296,6 +2298,8 @@ void UITask::loop() {
       c = handleTripleClick(KEY_SELECT);
     } else if (ev == BUTTON_EVENT_QUAD_CLICK) {
       c = handleQuadClick(KEY_QUAD);
+    } else if (ev == BUTTON_EVENT_PENTA_CLICK) {
+      c = handleQuadClick(inCompose() ? KEY_PENTA : KEY_QUAD);
     }
     _analogue_pin_read_millis = millis();
   }

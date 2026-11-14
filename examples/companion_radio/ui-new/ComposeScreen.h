@@ -3,12 +3,13 @@
 // Write page: pick a channel or a favourite contact, then send a stock phrase
 // or a text typed on a one-screen keyboard. Included from UITask.cpp only.
 //
-// Single button everywhere on this page:
-//   click  - next item (keyboard: next key in the row)
-//   double - previous item (keyboard: row below)
-//   triple - back (keyboard: row above)
-//   hold   - choose / type the key (COMPOSE_HOLD_MILLIS here, shorter than elsewhere)
-//   quad   - leave to the home pages
+// Single button. Lists (recipients, phrases):
+//   click  - next item        double - previous item
+//   triple - back             quad / five - leave to the home pages
+//   hold   - choose (COMPOSE_HOLD_MILLIS here, shorter than elsewhere)
+// Keyboard:
+//   click  - right    double - left    triple - down    quad - up
+//   five   - leave without sending     hold - type the key
 
 #include "UITask.h"
 #include "../MyMesh.h"
@@ -78,21 +79,18 @@ class ComposeScreen : public UIScreen {
     return 0;
   }
 
-  // stock phrases; "ping" stays in English in both languages.
-  // The first PHRASES_P1 share the screen with the keyboard button, the rest
-  // fill a second screen (4 rows of 2) that the focus moves to after the last one.
-  #define PHRASES_P1  6
-  const char* const* phrases(int& n) const {
-    static const char* const en[] = {
-      "ok", "ping", "yes", "no", "hello", "goodbye",
-      "on my way", "arrived", "waiting", "where?", "thanks", "soon", "call back", "SOS",
-    };
-    static const char* const rus[] = {
-      "ок", "ping", "да", "нет", "привет", "пока",
-      "в пути", "на месте", "жду", "где ты?", "спасибо", "скоро", "перезвоню", "SOS",
-    };
-    n = sizeof(en) / sizeof(en[0]);
-    return ru() ? rus : en;
+  // stock phrases (UiPhrases.h) or the ones set from the console. The first
+  // UI_PHRASES_P1 share the screen with the keyboard button, the rest fill
+  // further screens of UI_PHRASES_PER (4 rows of 2); the focus moves on to the
+  // next screen after the last phrase of one.
+  static int numPhrases() { return UI_PHRASE_COUNT; }
+  static const char* phraseAt(int i) { return the_mesh.uiPhrase(i); }
+  static int phrasePages() {
+    return 1 + (UI_PHRASE_COUNT - UI_PHRASES_P1 + UI_PHRASES_PER - 1) / UI_PHRASES_PER;
+  }
+  // screen of PHRASE item sel (0 = keyboard button, phrase i is item i + 1)
+  static int phrasePageOf(int sel) {
+    return sel <= UI_PHRASES_P1 ? 0 : 1 + (sel - 1 - UI_PHRASES_P1) / UI_PHRASES_PER;
   }
 
   static int utf8Count(const char* s) {
@@ -340,24 +338,27 @@ private:
   }
 
   // screen 1: the keyboard entry on top (item 0), phrases below in two columns;
-  // screen 2: the remaining phrases, 4 rows of 2. The title shows 1/2 or 2/2.
+  // further screens: the next phrases, 4 rows of 2. The title shows 1/3, 2/3...
   void drawPhrases(DisplayDriver& display) {
-    int np;
-    const char* const* p = phrases(np);
-    bool second = _sel > PHRASES_P1;
-    char name[56];
+    int page = phrasePageOf(_sel);
+    char name[56], pos[8];
     titleName(name, sizeof(name));
-    drawTitle(display, name, second ? "2/2" : "1/2");
+    snprintf(pos, sizeof(pos), "%d/%d", page + 1, phrasePages());
+    drawTitle(display, name, pos);
     int half = display.width() / 2;
-    if (!second) {
+    char shown[UI_PHRASE_LEN + 4];
+    if (page == 0) {
       drawCell(display, 2, 15, display.width() - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
-      for (int i = 0; i < PHRASES_P1 && i < np; i++) {
-        drawCell(display, (i % 2) * half + 2, 15 + (i / 2 + 1) * 12, half - 4, p[i], _sel == i + 1, true);
+      for (int i = 0; i < UI_PHRASES_P1 && i < numPhrases(); i++) {
+        display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
+        drawCell(display, (i % 2) * half + 2, 15 + (i / 2 + 1) * 12, half - 4, shown, _sel == i + 1, true);
       }
     } else {
-      for (int i = PHRASES_P1; i < np; i++) {
-        int k = i - PHRASES_P1;
-        drawCell(display, (k % 2) * half + 2, 15 + (k / 2) * 12, half - 4, p[i], _sel == i + 1, true);
+      int from = UI_PHRASES_P1 + (page - 1) * UI_PHRASES_PER;
+      for (int i = from; i < from + UI_PHRASES_PER && i < numPhrases(); i++) {
+        int k = i - from;
+        display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
+        drawCell(display, (k % 2) * half + 2, 15 + (k / 2) * 12, half - 4, shown, _sel == i + 1, true);
       }
     }
   }
@@ -541,7 +542,7 @@ public:
       send(true);   // same text, same recipient
       return true;
     }
-    if (c == KEY_QUAD || _mode == RESULT) {
+    if (c == KEY_PENTA || (c == KEY_QUAD && _mode != KEYS) || _mode == RESULT) {
       _task->gotoHomeScreen();
       return true;
     }
@@ -557,8 +558,7 @@ public:
       return true;
     }
     if (_mode == PHRASE) {
-      int np;
-      const char* const* p = phrases(np);
+      int np = numPhrases();
       if (next || c == KEY_DOWN) step(_sel, np + 1, 1);
       else if (prev || c == KEY_UP) step(_sel, np + 1, -1);
       else if (back) {
@@ -572,7 +572,7 @@ public:
           _row = 1;   // letters
           _col = 0;
         } else {
-          StrHelper::strncpy(_text, p[_sel - 1], sizeof(_text));
+          StrHelper::strncpy(_text, phraseAt(_sel - 1), sizeof(_text));
           _len = strlen(_text);
           send();
         }
@@ -580,7 +580,7 @@ public:
       return true;
     }
 
-    // keyboard: click moves along the row, double goes a row down, triple a row up
+    // keyboard: 1 click right, 2 left, 3 down, 4 up (5 leaves, see above)
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       if (_row == KB_ACTION_ROW) {
         int a = (actionAt(_col) + 1) % ACT_COUNT;
@@ -588,16 +588,16 @@ public:
       } else {
         step(_col, cols(), 1);
       }
-    } else if (c == KEY_LEFT) {
+    } else if (c == KEY_PREV || c == KEY_LEFT) {
       if (_row == KB_ACTION_ROW) {
         int a = (actionAt(_col) + ACT_COUNT - 1) % ACT_COUNT;
         _col = actionCol(a);
       } else {
         step(_col, cols(), -1);
       }
-    } else if (c == KEY_PREV || c == KEY_DOWN) {
+    } else if (c == KEY_SELECT || c == KEY_DOWN) {
       step(_row, KB_ROWS, 1);
-    } else if (c == KEY_SELECT || c == KEY_UP) {
+    } else if (c == KEY_QUAD || c == KEY_UP) {
       step(_row, KB_ROWS, -1);
     } else if (c == KEY_CANCEL) {
       _mode = PHRASE;

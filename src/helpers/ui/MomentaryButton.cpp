@@ -135,7 +135,7 @@ int MomentaryButton::check(bool repeat_click) {
         event = BUTTON_EVENT_QUAD_CLICK;
         break;
       default:
-        event = BUTTON_EVENT_QUAD_CLICK;
+        event = BUTTON_EVENT_PENTA_CLICK;
         break;
     }
     _click_count = 0;
