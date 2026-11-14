@@ -31,8 +31,10 @@ jobs:
           - Heltec_t114_companion_radio_usb
           - Heltec_v3_companion_radio_ble
           - Heltec_v3_companion_radio_usb
+          - Heltec_v3_companion_radio_wifi
           - heltec_v4_companion_radio_ble
           - heltec_v4_companion_radio_usb
+          - heltec_v4_companion_radio_wifi
 
     steps:
       - name: Clone Repo

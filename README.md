@@ -11,7 +11,7 @@
 | Готовые фразы `ok`, `ping`, `yes`, `no`, `hello`, `goodbye` | — | ✅ |
 | Отметка «Delivered» для личных сообщений с устройства | — | ✅ |
 | Очередь сообщений для телефона | 256 сообщений | ≈500 в той же памяти (T114) |
-| Сборки | все платы, все роли | только companion: T114, V3, V4 |
+| Сборки | все платы, все роли | только companion BLE, USB и Wi‑Fi: T114, V3, V4 |
 
 <p align="center">
   <img src="docs/screens/ticker/ticker_t114.gif" alt="Бегущая строка на Heltec T114" width="480">
@@ -126,10 +126,16 @@ z x c v b n m , . !
 | Heltec T114 | `Heltec_t114_companion_radio_usb` | выключена |
 | Heltec V3 | `Heltec_v3_companion_radio_ble` | выключена |
 | Heltec V3 | `Heltec_v3_companion_radio_usb` | выключена |
+| Heltec V3 | `Heltec_v3_companion_radio_wifi` | выключена |
 | Heltec V4 | `heltec_v4_companion_radio_ble` | выключена |
 | Heltec V4 | `heltec_v4_companion_radio_usb` | выключена |
+| Heltec V4 | `heltec_v4_companion_radio_wifi` | выключена |
+
+Сборки `_ble` подключаются к приложению по Bluetooth, `_usb` — по USB-кабелю, `_wifi` — по Wi‑Fi (TCP). У T114 нет Wi‑Fi, поэтому для него только Bluetooth и USB.
 
 Во всех сборках строку можно включить на странице Msg scroll.
+
+**Wi‑Fi.** Имя сети и пароль в Wi‑Fi-сборке задаются при сборке, с устройства их не поменять. В готовых файлах стоят `myssid` и `mypwd`, как в оригинальном MeshCore: устройство подключится к сети с этими именем и паролем (например, к точке доступа на телефоне). Чтобы подключить его к своей сети, поменяйте `WIFI_SSID` и `WIFI_PWD` в `variants/heltec_v3/platformio.ini` или `variants/heltec_v4/platformio.ini` и соберите прошивку сами. Приложение подключается к устройству по TCP, порт `5000`.
 
 ### Как прошить
 

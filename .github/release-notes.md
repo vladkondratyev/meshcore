@@ -18,4 +18,6 @@
 | Heltec V3 | `Heltec_v3_companion_radio_ble…-merged.bin` для первой установки, `.bin` для обновления |
 | Heltec V4 | `heltec_v4_companion_radio_ble…-merged.bin` для первой установки, `.bin` для обновления |
 
-Сборки `_usb` — для подключения к клиенту по USB вместо Bluetooth.
+Сборки `_ble` — подключение к приложению по Bluetooth, `_usb` — по USB, `_wifi` — по Wi‑Fi (только V3 и V4, у T114 нет Wi‑Fi).
+
+В Wi‑Fi-сборках сеть задаётся при сборке: в готовых файлах это `myssid` / `mypwd`, порт TCP `5000`. Для своей сети соберите прошивку с вашими `WIFI_SSID` и `WIFI_PWD`.
