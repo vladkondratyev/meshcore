@@ -120,9 +120,9 @@ def layout_phrases(d, ph):
     return slots, page + 1
 
 
-def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False):
+def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False, smart=()):
     L = LANG[lang]
-    ph = L["phrases"]
+    ph = [">" + x for x in smart] + L["phrases"]
     slots, pages = layout_phrases(d, ph)
     fp = 2 if morse else 1
     page = 0 if sel < fp else slots[sel - fp][0]
@@ -146,12 +146,14 @@ def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False):
             cell(d, col * half + 2, y, half - 4, p, sel == i + fp, True)
 
 
-def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300, freq=False, caps=True, lang="ru"):
+def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300, freq=False, caps=True, lang="ru",
+                     cursor=False):
     ro.home_header(d, "TICKER")
     w = d.width()
     lay = ("частотн." if lang == "ru" else "freq") if freq else ("ЙЦУКЕН" if lang == "ru" else "QWERTY")
     rows = [("Msg scroll", "ON" if scroll else "OFF"), ("Morse input", "ON" if morse else "OFF"),
-            ("Morse dash", "%dms" % dash), ("Keys layout", lay), ("Auto caps", "ON" if caps else "OFF")]
+            ("Morse dash", "%dms" % dash), ("Keys layout", lay), ("Auto caps", "ON" if caps else "OFF"),
+            ("Auto cursor", "ON" if cursor else "OFF")]
     top = row - 2 if edit and row >= 3 else 0
     d.setTextSize(1)
     for i in range(top, top + 3):
@@ -164,7 +166,7 @@ def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300, fr
         rr = d.translate(r, 16)
         d.setCursor(w - 3 - d.getTextWidth(rr), y); d.print(rr)
     d.setColor(WHITE)
-    d.fillRect(w - 1, 19 + 32 * top // 5, 1, 32 * 3 // 5)
+    d.fillRect(w - 1, 19 + 32 * top // 6, 1, 32 * 3 // 6)
     d.drawTextCentered(w // 2, 64 - 11, "hold:change 3x:done" if edit else "settings: " + ro.PRESS_LABEL)
 
 
@@ -240,12 +242,26 @@ MORSE_SCREENS = [
     ("98_morse_en", "set lang en: латиница", lambda d: scr_morse(d, "en", "@Alexey", text="hi", code="--.", tip=0)),
 ]
 
+SMART_SCREENS = [
+    ("a1_smart_where", "«Ты где?» — ответы сверху",
+     lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=2, smart=("в пути", "на месте", "дома"))),
+    ("a2_smart_when", "«Когда будешь?»",
+     lambda d: scr_phrases(d, "ru", "RE @Fox", sel=2, smart=("скоро", "через 10 мин", "через час"))),
+    ("a3_next_word", "После «Буду » — следующее слово",
+     lambda d: scr_keys(d, "ru", "@Алексей", text="Буду ", row=3, col=0)),
+    ("a4_next_word2", "После «через » — дальше",
+     lambda d: scr_keys(d, "ru", "@Алексей", text="Буду через ", row=3, col=8)),
+    ("a5_settings_cursor", "Auto cursor в настройках",
+     lambda d: scr_msg_settings(d, True, 5, cursor=True)),
+    ("a6_save_phrase", "Из Sent: сделать фразой", lambda d: scr_save_phrase(d)),
+]
+
 JOURNEY_SCREENS = [
     ("01_home_unread", "1. Пришло сообщение: конверт в заголовке", lambda d: scr_home_badge(d, 1, connected=False)),
     ("02_message", "2. Читаете. Удержание — ответить",
      lambda d: ro.scr_message(d, "Ты где? Мы у моста", unread=1, origin="(1) Алексей:")),
     ("03_reply_phrases", "3. RE: фраза одной кнопкой или свой текст",
-     lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=0, morse=True)),
+     lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=2, morse=True, smart=("в пути", "на месте", "дома"))),
     ("04_reply_keys", "4. Клавиатура с подсказками слов",
      lambda d: scr_keys(d, "ru", "@Алексей", text="Буду у мо", row=3, col=8)),
     ("05_delivered", "5. Доставлено", lambda d: scr_result(d, "RE @Алексей", "Delivered")),
@@ -280,11 +296,18 @@ WORDS = {l: re.findall(r'"([^"]+)"', _WH.split("WORDS_%s[] = {" % l.upper())[1].
          for l in ("ru", "en")}
 
 
+_SR = open(os.path.join(ROOT, "examples", "companion_radio", "ui-new", "SmartReplies.h"), encoding="utf-8").read()
+NEXT = {l: dict(re.findall(r'\{ "([^"]+)", "([^"]+)" \}', _SR.split("NEXT_%s[] = {" % l.upper())[1].split("};")[0]))
+        for l in ("ru", "en")}
+
+
 def hints_for(lang, text):
     """Same as ComposeScreen::updateHints with an empty Sent list."""
     part = text.split(" ")[-1]
     if not part:
-        return ["", ""]
+        prev = text.rstrip(" ").split(" ")[-1].lower() if text.strip() else ""
+        nxt = NEXT[lang].get(prev, "").split("|") if prev and prev[-1] not in ".,!?:" else []
+        return (nxt + ["", ""])[:2]
     out = []
     for w in WORDS[lang]:
         if len(w) > len(part) and w.lower().replace("ё", "е").startswith(part.lower().replace("ё", "е")) \
@@ -485,6 +508,16 @@ def scr_sent(d, target, pos, state, age, text, re=None):
     d.printWordWrap(d.translate(text, 121), w)
 
 
+def scr_save_phrase(d, slot=18, now="луна", text="Буду у моста"):
+    w = d.width()
+    d.setTextSize(1); d.setColor(WHITE)
+    d.drawTextEllipsized(0, 0, w, d.translate("Сделать фразой", 30))
+    d.drawRect(0, 11, w, 1)
+    d.drawTextEllipsized(0, 14, w, d.translate("фраза %d: %s" % (slot, now), 60))
+    d.drawTextEllipsized(0, 26, w, d.translate("станет: " + text, 60))
+    d.drawTextCentered(w // 2, 52, d.translate("1:номер держ:да 3:нет", 40))
+
+
 SENT_SCREENS = [
     ("80_sent_page", "Страница Sent", scr_sent_page),
     ("81_sent_reply_dm", "Ответ в личку: на что и статус",
@@ -494,6 +527,7 @@ SENT_SCREENS = [
                         re="Fox: кто где?")),
     ("83_sent_noreply", "Личное без ответа",
      lambda d: scr_sent(d, "@Base Camp", "3/4", "No reply", "1h", "перезвоню")),
+    ("84_sent_save", "4 нажатия: сделать фразой", scr_save_phrase),
 ]
 
 NEIGHBOR_SCREENS = [
@@ -665,6 +699,16 @@ def main():
         im.save(os.path.join(out, "sent", fname + ".png"))
         sitems.append((label, im))
     sheet(sitems, 2, "Sent — отправленные с устройства").save(os.path.join(out, "gallery_sent.png"))
+
+    aitems = []
+    os.makedirs(os.path.join(out, "smart"), exist_ok=True)
+    for fname, label, fn in SMART_SCREENS:
+        d = Dev(); fn(d)
+        im = to_image(d)
+        im.save(os.path.join(out, "smart", fname + ".png"))
+        aitems.append((label, im))
+    sheet(aitems, 3, "Меньше набора: готовые ответы, следующее слово, свои фразы").save(
+        os.path.join(out, "gallery_smart.png"))
 
     # one message from start to end, without a phone
     jitems = []

@@ -50,7 +50,7 @@ class SentScreen : public UIScreen {
       display.drawTextEllipsized(0, 38, display.width(), ru() ? "длинный: обрежется" : "too long: cut short");
     }
     display.setColor(UIColor::secondary_txt);
-    display.drawTextCentered(display.width() / 2, 52, ru() ? "1:номер удерж:да 3:нет" : "1:number hold:yes 3:no");
+    display.drawTextCentered(display.width() / 2, 52, ru() ? "1:номер держ:да 3:нет" : "1:next hold:yes 3:no");
   }
 
   void resetPage() {
