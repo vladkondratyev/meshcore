@@ -78,10 +78,19 @@ class ComposeScreen : public UIScreen {
     return 0;
   }
 
-  // stock phrases; "ping" stays in English in both languages
+  // stock phrases; "ping" stays in English in both languages.
+  // The first PHRASES_P1 share the screen with the keyboard button, the rest
+  // fill a second screen (4 rows of 2) that the focus moves to after the last one.
+  #define PHRASES_P1  6
   const char* const* phrases(int& n) const {
-    static const char* const en[] = { "ok", "ping", "yes", "no", "hello", "goodbye" };
-    static const char* const rus[] = { "ок", "ping", "да", "нет", "привет", "пока" };
+    static const char* const en[] = {
+      "ok", "ping", "yes", "no", "hello", "goodbye",
+      "on my way", "arrived", "waiting", "where?", "thanks", "soon", "call back", "SOS",
+    };
+    static const char* const rus[] = {
+      "ок", "ping", "да", "нет", "привет", "пока",
+      "в пути", "на месте", "жду", "где ты?", "спасибо", "скоро", "перезвоню", "SOS",
+    };
     n = sizeof(en) / sizeof(en[0]);
     return ru() ? rus : en;
   }
@@ -244,15 +253,26 @@ class ComposeScreen : public UIScreen {
     }
   }
 
-  // the keyboard entry on top (item 0), phrases below in two columns
+  // screen 1: the keyboard entry on top (item 0), phrases below in two columns;
+  // screen 2: the remaining phrases, 4 rows of 2. The title shows 1/2 or 2/2.
   void drawPhrases(DisplayDriver& display) {
-    drawTargetTitle(display);
     int np;
     const char* const* p = phrases(np);
+    bool second = _sel > PHRASES_P1;
+    char name[48];
+    targetName(_target, name, sizeof(name));
+    drawTitle(display, name, second ? "2/2" : "1/2");
     int half = display.width() / 2;
-    drawCell(display, 2, 15, display.width() - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
-    for (int i = 0; i < np; i++) {
-      drawCell(display, (i % 2) * half + 2, 15 + (i / 2 + 1) * 12, half - 4, p[i], _sel == i + 1, true);
+    if (!second) {
+      drawCell(display, 2, 15, display.width() - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
+      for (int i = 0; i < PHRASES_P1 && i < np; i++) {
+        drawCell(display, (i % 2) * half + 2, 15 + (i / 2 + 1) * 12, half - 4, p[i], _sel == i + 1, true);
+      }
+    } else {
+      for (int i = PHRASES_P1; i < np; i++) {
+        int k = i - PHRASES_P1;
+        drawCell(display, (k % 2) * half + 2, 15 + (k / 2) * 12, half - 4, p[i], _sel == i + 1, true);
+      }
     }
   }
 

@@ -30,7 +30,7 @@
 #ifndef UI_RECENT_LIST_SIZE
   #define UI_RECENT_LIST_SIZE 4
 #endif
-#define NEIGHBOR_SCROLL_MS  2000
+#define NEIGHBOR_SCROLL_MS  3000   // one page of neighbours stays this long
 
 #define SCAN_SAMPLE_MILLIS    50   // noise scan RSSI sampling, independent of the frame rate
 #ifndef SCAN_REFRESH_MILLIS
@@ -247,7 +247,11 @@ class HomeScreen : public UIScreen {
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
   NeighborInfo neighbor_list[NEIGHBOR_TABLE_SIZE];
-  int neighbors_scroll_offset = 0;
+  int neighbors_scroll_offset = 0;   // page of the neighbour list on screen
+  static int neighborsPerPage(DisplayDriver& display) {
+    int per = (display.height() - 20) / 11;
+    return per < 1 ? 1 : per;
+  }
   unsigned long neighbors_next_scroll = 0;
   int16_t scan_peak;
   int16_t scan_live = -127;
@@ -527,8 +531,30 @@ public:
     display.setColor(UIColor::title_txt);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
-    display.setCursor(0, 2);
-    display.print(filtered_name);
+    if (_page == HomePage::NEIGHBORS) {
+      // "Name [7] 1/2": neighbours in total and the page on screen when they do not fit
+      int n = the_mesh.getNeighbors(neighbor_list, NEIGHBOR_TABLE_SIZE);
+      int per = neighborsPerPage(display);
+      int pages = (n + per - 1) / per;
+      if (neighbors_scroll_offset >= pages) neighbors_scroll_offset = 0;
+      if (pages > 1 && neighbors_next_scroll != 0 && (long)(millis() - neighbors_next_scroll) >= 0) {
+        neighbors_scroll_offset = (neighbors_scroll_offset + 1) % pages;   // next page of neighbours
+        neighbors_next_scroll = millis() + NEIGHBOR_SCROLL_MS;
+      }
+      if (pages > 1) sprintf(tmp, " [%d] %d/%d", n, neighbors_scroll_offset + 1, pages);
+      else sprintf(tmp, " [%d]", n);
+      int room = display.width() - 24 - 5 - 3 - display.getTextWidth(tmp);   // up to the battery icon
+#ifdef PIN_BUZZER
+      if (_task->isBuzzerQuiet()) room -= 9;
+#endif
+      display.drawTextEllipsized(0, 2, room, filtered_name);
+      int name_w = display.getTextWidth(filtered_name);
+      display.setCursor(name_w < room ? name_w : room, 2);
+      display.print(tmp);
+    } else {
+      display.setCursor(0, 2);
+      display.print(filtered_name);
+    }
 
     // battery voltage
     renderBatteryIndicator(display, _task->getBattMilliVolts());
@@ -689,24 +715,23 @@ public:
       } else {
         const int line_h = 11;
         const int y0 = 20;
-        int visible = (display.height() - y0) / line_h;
-        if (visible < 1) visible = 1;
-        if (n <= visible) {
+        int visible = neighborsPerPage(display);
+        int pages = (n + visible - 1) / visible;
+        // the header (drawn above) already shows this page; the next page comes after the next frame
+        if (pages <= 1) {
           neighbors_scroll_offset = 0;
           neighbors_next_scroll = 0;
         } else {
-          if (neighbors_scroll_offset >= n) neighbors_scroll_offset = 0;
+          if (neighbors_scroll_offset >= pages) neighbors_scroll_offset = 0;
           if (neighbors_next_scroll == 0) {
-            neighbors_next_scroll = millis() + NEIGHBOR_SCROLL_MS;
-          } else if ((long)(millis() - neighbors_next_scroll) >= 0) {
-            neighbors_scroll_offset = (neighbors_scroll_offset + 1) % n;
             neighbors_next_scroll = millis() + NEIGHBOR_SCROLL_MS;
           }
         }
 
-        int rows = n < visible ? n : visible;
+        int first = neighbors_scroll_offset * visible;
+        int rows = n - first < visible ? n - first : visible;
         for (int i = 0; i < rows; i++) {
-          auto a = &neighbor_list[(neighbors_scroll_offset + i) % n];
+          auto a = &neighbor_list[first + i];
           int y = y0 + i * line_h;
           float snr = a->snr_x4 / 4.0f;
           sprintf(tmp, "%+.0f", snr);
@@ -2005,11 +2030,11 @@ int UITask::getDeviceStored() const {
 }
 
 void UITask::clearTakenMsg() {
+  // The phone took a message. The copy on this device stays unread until it is
+  // read or dismissed with the button: neither the phone nor the running line
+  // marks it read here.
   if (!msg_preview) return;
-  bool empty = ((MsgPreviewScreen *) msg_preview)->dropOldest();
-  if (empty && curr == msg_preview) {
-    gotoHomeScreen();
-  } else if (curr == msg_preview || curr == clock || curr == home) {
+  if (curr == msg_preview || curr == clock || curr == home) {
     _next_refresh = 100;
   }
 }
@@ -2018,7 +2043,8 @@ void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
-  if (msgcount == 0 && curr != clock && !inReader() && !inCompose()) {
+  // an open message window stays open: only button presses read it
+  if (msgcount == 0 && curr != clock && curr != msg_preview && !inReader() && !inCompose()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
