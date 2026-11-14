@@ -101,14 +101,22 @@ class ComposeScreen : public UIScreen {
     return n;
   }
 
+public:
+  typedef ComposeTarget Target;
+
+private:
   UITask* _task;
   Mode _mode = PICK;
 
-  // targets: device channels first, then favourite chat/room contacts
-  uint8_t _ch[MAX_GROUP_CHANNELS];
-  int _num_ch = 0;
-  uint8_t _fav[COMPOSE_MAX_FAVS][6];   // pub key prefixes
-  int _num_fav = 0;
+  // targets: the last COMPOSE_RECENT recipients first, then device channels,
+  // then favourite chat/room contacts
+  #define COMPOSE_RECENT  3
+  #define COMPOSE_MAX_TARGETS  (MAX_GROUP_CHANNELS + COMPOSE_MAX_FAVS + 1)
+  Target _t[COMPOSE_MAX_TARGETS];
+  int _num_t = 0;
+  int _num_recent = 0;          // how many of the first targets are recent ones
+  Target _recent[COMPOSE_RECENT];
+  int _recent_n = 0;
   int _sel = 0, _top = 0;
   int _target = -1;
 
@@ -121,44 +129,86 @@ class ComposeScreen : public UIScreen {
 
   struct Collect : public ContactVisitor {
     ComposeScreen* s;
+    int n = 0;
     void onContactVisit(const ContactInfo& c) override {
-      if (s->_num_fav >= COMPOSE_MAX_FAVS) return;
+      if (n >= COMPOSE_MAX_FAVS) return;
       if ((c.flags & 0x01) == 0) return;   // bit 0 = favourite
       if (c.type != ADV_TYPE_CHAT && c.type != ADV_TYPE_ROOM) return;
-      memcpy(s->_fav[s->_num_fav++], c.id.pub_key, 6);
+      Target t;
+      t.is_ch = 0;
+      t.ch = 0;
+      memcpy(t.key, c.id.pub_key, 6);
+      if (s->addTarget(t)) n++;
     }
   };
 
-  int numTargets() const { return _num_ch + _num_fav; }
-  bool isChannel(int i) const { return i < _num_ch; }
+  int numTargets() const { return _num_t; }
+  bool isChannel(int i) const { return _t[i].is_ch != 0; }
+
+  static bool exists(const Target& t) {
+    if (t.is_ch) {
+      ChannelDetails ch;
+      return the_mesh.getChannel(t.ch, ch) && ch.name[0];
+    }
+    return the_mesh.lookupContactByPubKey(t.key, 6) != NULL;
+  }
+
+  int findTarget(const Target& t) const {
+    for (int i = 0; i < _num_t; i++) if (_t[i].same(t)) return i;
+    return -1;
+  }
+
+  bool addTarget(const Target& t) {
+    if (_num_t >= COMPOSE_MAX_TARGETS || findTarget(t) >= 0) return false;
+    _t[_num_t++] = t;
+    return true;
+  }
 
   void targetName(int i, char* buf, size_t n) {
-    if (isChannel(i)) {
-      ChannelDetails ch;
-      if (the_mesh.getChannel(_ch[i], ch)) {
-        snprintf(buf, n, "#%s", ch.name[0] == '#' ? ch.name + 1 : ch.name);
-        return;
-      }
-    } else {
-      ContactInfo* c = the_mesh.lookupContactByPubKey(_fav[i - _num_ch], 6);
-      if (c) {
-        snprintf(buf, n, "@%s", c->name);
-        return;
+    if (i >= 0 && i < _num_t) {
+      if (isChannel(i)) {
+        ChannelDetails ch;
+        if (the_mesh.getChannel(_t[i].ch, ch)) {
+          snprintf(buf, n, "#%s", ch.name[0] == '#' ? ch.name + 1 : ch.name);
+          return;
+        }
+      } else {
+        ContactInfo* c = the_mesh.lookupContactByPubKey(_t[i].key, 6);
+        if (c) {
+          snprintf(buf, n, "@%s", c->name);
+          return;
+        }
       }
     }
     snprintf(buf, n, "?");
   }
 
   void loadTargets() {
-    _num_ch = 0;
+    _num_t = 0;
+    for (int i = 0; i < _recent_n; i++) {   // the last recipients, newest first
+      if (exists(_recent[i])) addTarget(_recent[i]);
+    }
+    _num_recent = _num_t;
     for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
       ChannelDetails ch;
-      if (the_mesh.getChannel(i, ch) && ch.name[0]) _ch[_num_ch++] = (uint8_t)i;
+      if (!the_mesh.getChannel(i, ch) || !ch.name[0]) continue;
+      Target t;
+      t.is_ch = 1;
+      t.ch = (uint8_t)i;
+      memset(t.key, 0, sizeof(t.key));
+      addTarget(t);
     }
-    _num_fav = 0;
     Collect v;
     v.s = this;
     the_mesh.scanRecentContacts(0, &v);   // latest heard first
+  }
+
+  void rememberRecent(const Target& t) {
+    int at = _recent_n < COMPOSE_RECENT ? _recent_n : COMPOSE_RECENT - 1;
+    for (int i = 0; i < _recent_n; i++) if (_recent[i].same(t)) { at = i; break; }
+    for (int i = at; i > 0; i--) _recent[i] = _recent[i - 1];
+    _recent[0] = t;
+    if (at >= _recent_n) _recent_n = at + 1;
   }
 
   static void step(int& v, int n, int d) {
@@ -169,10 +219,11 @@ class ComposeScreen : public UIScreen {
     if (_len == 0 || _target < 0) return;
     _text[_len] = 0;
     if (isChannel(_target)) {
-      _sent = the_mesh.uiSendChannel(_ch[_target], _text) ? 3 : 0;
+      _sent = the_mesh.uiSendChannel(_t[_target].ch, _text) ? 3 : 0;
     } else {
-      _sent = the_mesh.uiSendDirect(_fav[_target - _num_ch], _text);
+      _sent = the_mesh.uiSendDirect(_t[_target].key, _text);
     }
+    if (_sent) rememberRecent(_t[_target]);
     _task->notify(_sent ? UIEventType::ack : UIEventType::none);
     _mode = RESULT;
     _result_at = millis();
@@ -250,6 +301,11 @@ class ComposeScreen : public UIScreen {
       }
       display.drawTextEllipsized(2, y, display.width() - 4, shown);
       display.setColor(UIColor::primary_txt);
+      if (i == _num_recent - 1 && i + 1 < numTargets()) {   // dotted line after the recent ones
+        display.setColor(UIColor::secondary_txt);
+        for (int x = 2; x < display.width() - 2; x += 4) display.fillRect(x, y + 10, 2, 1);
+        display.setColor(UIColor::primary_txt);
+      }
     }
   }
 
@@ -327,6 +383,10 @@ class ComposeScreen : public UIScreen {
     }
   }
 
+  bool canRetry() const {
+    return _sent == 0 || ((_sent == 1 || _sent == 2) && the_mesh.uiAckState() == MyMesh::UI_ACK_LOST);
+  }
+
   void drawResult(DisplayDriver& display) {
     drawTargetTitle(display);
     const char* line = "Send failed";
@@ -343,6 +403,9 @@ class ComposeScreen : public UIScreen {
     display.setColor(UIColor::primary_txt);
     display.drawTextCentered(display.width() / 2, 26, line);
     display.setColor(UIColor::secondary_txt);
+    if (canRetry() && _len > 0) {
+      display.drawTextCentered(display.width() / 2, 42, "hold: send again");
+    }
     display.drawTextCentered(display.width() / 2, 53, "press: back");
   }
 
@@ -387,6 +450,23 @@ public:
     _text[0] = 0;
   }
 
+  // reply to an incoming message: the sender (or its channel) is the recipient
+  // even when it is not a favourite; the phrases come up first
+  bool enterReply(const Target& t) {
+    if (!exists(t)) return false;
+    enter();
+    int i = findTarget(t);
+    if (i < 0) {
+      if (_num_t >= COMPOSE_MAX_TARGETS) _num_t--;
+      i = _num_t;
+      _t[_num_t++] = t;
+    }
+    _target = _sel = i;
+    _mode = PHRASE;
+    _sel = 0;
+    return true;
+  }
+
   int render(DisplayDriver& display) override {
     display.setTextSize(1);
     switch (_mode) {
@@ -398,7 +478,9 @@ public:
     drawResult(display);
     _task->keepDisplayAwake();
     bool waiting = (_sent == 1 || _sent == 2) && the_mesh.uiAckState() == MyMesh::UI_ACK_WAIT;
-    if (!waiting && (long)(millis() - _result_at) > 4000) {
+    if (waiting) _result_at = millis();   // the countdown starts once the outcome is known
+    long keep = canRetry() ? 15000 : 4000;   // time to decide on sending again
+    if (!waiting && (long)(millis() - _result_at) > keep) {
       _task->gotoHomeScreen();
       return 100;
     }
@@ -411,6 +493,10 @@ public:
     bool ok = c == KEY_ENTER;
     bool back = c == KEY_SELECT || c == KEY_CANCEL;
 
+    if (_mode == RESULT && ok && canRetry() && _len > 0) {
+      send();   // same text, same recipient
+      return true;
+    }
     if (c == KEY_QUAD || _mode == RESULT) {
       _task->gotoHomeScreen();
       return true;

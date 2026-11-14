@@ -22,6 +22,16 @@
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
 
+// a recipient on the Write page: a device channel or a contact (pub key prefix)
+struct ComposeTarget {
+  uint8_t is_ch;
+  uint8_t ch;
+  uint8_t key[6];
+  bool same(const ComposeTarget& o) const {
+    return is_ch == o.is_ch && (is_ch ? ch == o.ch : memcmp(key, o.key, 6) == 0);
+  }
+};
+
 class UITask : public AbstractUITask {
   DisplayDriver* _display;
   SensorManager* _sensors;
@@ -85,6 +95,8 @@ public:
   void openReader();
   bool inReader() const { return curr != NULL && curr == reader; }
   void openCompose();
+  bool openReply(const ComposeTarget& to);
+  int  getUnreadCount() const;
   bool inCompose() const { return curr != NULL && curr == compose; }
   void showMsgPreview() { setCurrScreen(msg_preview); }
   bool reopenMsgPreview();

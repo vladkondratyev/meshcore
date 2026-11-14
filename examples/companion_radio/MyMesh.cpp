@@ -623,6 +623,8 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   // we only want to show text messages on display, not cli data
   if (_ui) for (int k = queued >> 1; k > 0; k--) _ui->clearTakenMsg();
   if (should_display && (queued & 1) && _ui) {
+    ui_rx_is_ch = 0;
+    memcpy(ui_rx_key, from.id.pub_key, sizeof(ui_rx_key));
     _ui->newMsg(path_len, from.name, text, offline_queue_len, false);
     if (!_serial->isConnected()) {
       _ui->notify(UIEventType::contactMessage);
@@ -757,6 +759,8 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     if (getChannel(channel_idx, channel_details)) {
       channel_name = channel_details.name;
     }
+    ui_rx_is_ch = 1;
+    ui_rx_ch = channel_idx;
     if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len, true);
   }
 #endif

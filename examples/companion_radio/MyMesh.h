@@ -126,6 +126,10 @@ public:
   int  uiSendDirect(const uint8_t* pub_prefix, const char* text);  // 0 failed, 1 direct, 2 flood
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
+  // sender of the message last passed to the UI, so the device can reply to it
+  uint8_t ui_rx_is_ch = 0;
+  uint8_t ui_rx_ch = 0;
+  uint8_t ui_rx_key[6] = {0};
 
 protected:
   float getAirtimeBudgetFactor() const override;

@@ -531,6 +531,25 @@ public:
     display.setColor(UIColor::title_txt);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
+    // unread messages: an envelope and the count left of the battery
+    int unread = _task->getUnreadCount();
+    char badge[8];
+    badge[0] = 0;
+    int badge_w = 0;
+    if (unread > 0) {
+      snprintf(badge, sizeof(badge), "%d", unread);
+      badge_w = 8 + 2 + display.getTextWidth(badge) + 4;
+    }
+    int header_right = display.width() - 24 - 5 - 3 - badge_w;   // up to the badge / battery icon
+#ifdef PIN_BUZZER
+    if (_task->isBuzzerQuiet()) header_right -= 9;
+#endif
+    if (unread > 0) {
+      int bx = header_right + 2;
+      display.drawXbm(bx, 3, envelope_icon, 8, 7);
+      display.setCursor(bx + 10, 2);
+      display.print(badge);
+    }
     if (_page == HomePage::NEIGHBORS) {
       // "Name [7] 1/2": neighbours in total and the page on screen when they do not fit
       int n = the_mesh.getNeighbors(neighbor_list, NEIGHBOR_TABLE_SIZE);
@@ -543,17 +562,13 @@ public:
       }
       if (pages > 1) sprintf(tmp, " [%d] %d/%d", n, neighbors_scroll_offset + 1, pages);
       else sprintf(tmp, " [%d]", n);
-      int room = display.width() - 24 - 5 - 3 - display.getTextWidth(tmp);   // up to the battery icon
-#ifdef PIN_BUZZER
-      if (_task->isBuzzerQuiet()) room -= 9;
-#endif
+      int room = header_right - display.getTextWidth(tmp);
       display.drawTextEllipsized(0, 2, room, filtered_name);
       int name_w = display.getTextWidth(filtered_name);
       display.setCursor(name_w < room ? name_w : room, 2);
       display.print(tmp);
     } else {
-      display.setCursor(0, 2);
-      display.print(filtered_name);
+      display.drawTextEllipsized(0, 2, header_right, filtered_name);
     }
 
     // battery voltage
@@ -1395,6 +1410,7 @@ class MsgPreviewScreen : public UIScreen {
     char origin[62];
     char msg[MAX_TEXT_LEN + 1];
     bool group;
+    ComposeScreen::Target from;   // who to reply to
   };
   #define MAX_UNREAD_MSGS   32
   int num_unread;
@@ -1641,6 +1657,9 @@ public:
       sprintf(p->origin, "(%d) %s:", (uint32_t) path_len, from_name);
     }
     StrHelper::strncpy(p->msg, msg, sizeof(p->msg));
+    p->from.is_ch = the_mesh.ui_rx_is_ch;
+    p->from.ch = the_mesh.ui_rx_ch;
+    memcpy(p->from.key, the_mesh.ui_rx_key, sizeof(p->from.key));
 #ifdef UI_MSG_TICKER
     if (_task->tickerEnabled()) {
       startTicker(p->origin, p->msg);   // the newest message runs across the screen first
@@ -1780,8 +1799,26 @@ public:
       resetPage();
       return true;
     }
-    if (c == KEY_ENTER) {
-      num_unread = 0;  // clear unread queue
+    if (c == KEY_ENTER) {   // hold: reply to the message on screen
+      ComposeScreen::Target to = unread[head].from;
+      if (num_unread > 0) {     // it counts as read, like a click
+        bool was_group = unread[head].group;
+        num_unread--;
+        if (was_group) { if (groups > 0) groups--; }
+        else if (chats > 0) chats--;
+        if (num_unread > 0) {
+          head = (head + 1) % MAX_UNREAD_MSGS;
+          resetPage();
+        }
+      }
+      if (!_task->openReply(to)) {
+        _task->showAlert("Can't reply", 1000);
+        if (num_unread == 0) _task->gotoHomeScreen();
+      }
+      return true;
+    }
+    if (c == KEY_QUAD) {    // four clicks: mark everything read
+      num_unread = 0;
       groups = chats = 0;
       _task->gotoHomeScreen();
       return true;
@@ -1971,6 +2008,18 @@ void UITask::openCompose() {
   if (!compose) return;
   ((ComposeScreen*)compose)->enter();
   setCurrScreen(compose);
+}
+
+bool UITask::openReply(const ComposeScreen::Target& to) {
+  if (!compose) return false;
+  if (!((ComposeScreen*)compose)->enterReply(to)) return false;
+  setCurrScreen(compose);
+  return true;
+}
+
+int UITask::getUnreadCount() const {
+  if (!msg_preview) return 0;
+  return ((MsgPreviewScreen *) msg_preview)->unreadCount();
 }
 
 void UITask::openReader() {
@@ -2329,7 +2378,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || inReader() || inCompose()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose()) return c;
   return 0;
 }
 
