@@ -165,12 +165,56 @@ def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0):
             cell(d, x0, y, x1 - x0, rows[r][c], row == r and col == c)
 
 
-def scr_result(d, target="@Alexey", line="Delivered"):
+def scr_result(d, target="@Alexey", line="Delivered", retry=False):
     title(d, target)
     w = d.width()
     d.setColor(WHITE); d.setTextSize(1)
     d.drawTextCentered(w // 2, 26, line)
+    if retry:
+        d.drawTextCentered(w // 2, 42, "hold: send again")
     d.drawTextCentered(w // 2, 53, "press: back")
+
+
+ENVELOPE = [0xFF, 0xC3, 0xA5, 0x99, 0x81, 0x81, 0xFF]
+
+
+def badge(d, unread):
+    """Envelope and unread count left of the battery icon."""
+    s = str(unread)
+    bw = 8 + 2 + d.getTextWidth(s) + 4
+    right = d.width() - 24 - 5 - 3 - bw
+    d.setColor(BLACK); d.fillRect(0, 0, d.width() - 24 - 5 - 1, 12)
+    d.setColor(WHITE); d.setTextSize(1)
+    d.drawTextEllipsized(0, 2, right, d.translate(ro.NODE_NAME, 32))
+    d.drawXbm(right + 2, 3, ENVELOPE, 8, 7)
+    d.setCursor(right + 12, 2); d.print(s)
+
+
+def scr_home_badge(d, unread=3):
+    ro.scr_home(d, msg=unread, unread=unread)
+    badge(d, unread)
+
+
+def scr_write_badge(d, unread=3):
+    scr_write_page(d)
+    badge(d, unread)
+
+
+def scr_pick_recent(d, sel=0, recent=2):
+    """Recent recipients first, a dotted line, then channels and favourites."""
+    title(d, "Write to:")
+    w = d.width()
+    items = ["@Алексей", "#Squad North", "#public", "@Base Camp"]
+    for r, it in enumerate(items):
+        y = 14 + r * 12
+        d.setColor(WHITE)
+        if r == sel:
+            d.fillRect(0, y - 1, w, 11); d.setColor(BLACK)
+        d.drawTextEllipsized(2, y, w - 4, d.translate(it, 48))
+        d.setColor(WHITE)
+        if r == recent - 1:
+            for x in range(2, w - 2, 4):
+                d.fillRect(x, y + 10, 2, 1)
 
 
 def scr_ticker_page(d, on=True):
@@ -202,6 +246,18 @@ LANG_SCREENS = [
     ("46_write_send", "Кнопка SEND", lambda d, l: scr_keys(
         d, l, text={"en": "meet at 18 bridge", "ru": "у моста в 18:00"}[l], row=4,
         col={"en": 7, "ru": 8}[l])),
+]
+
+# answering from the device: name, caption, function(d)
+REPLY_SCREENS = [
+    ("70_home_unread", "Главная: 3 непрочитанных", scr_home_badge),
+    ("71_message", "Входящее: удержание — ответить",
+     lambda d: ro.scr_message(d, "Ты где? Мы у моста", unread=3, origin="(1) Алексей:")),
+    ("72_reply_phrases", "Ответ: адресат уже выбран", lambda d: scr_phrases(d, "ru", "@Алексей", sel=0)),
+    ("73_reply_delivered", "Доставлено", lambda d: scr_result(d, "@Алексей", "Delivered")),
+    ("74_reply_noreply", "Нет ответа: удержание — ещё раз",
+     lambda d: scr_result(d, "@Алексей", "No reply", retry=True)),
+    ("75_pick_recent", "Последние адресаты сверху", scr_pick_recent),
 ]
 
 NEIGHBOR_SCREENS = [
@@ -354,6 +410,16 @@ def main():
         nitems.append((label, im))
     sheet(nitems, 3, "Neighbors — число соседей и экран в заголовке").save(
         os.path.join(out, "gallery_neighbors.png"))
+
+    ritems = []
+    os.makedirs(os.path.join(out, "reply"), exist_ok=True)
+    for fname, label, fn in REPLY_SCREENS:
+        d = Dev(); fn(d)
+        im = to_image(d)
+        im.save(os.path.join(out, "reply", fname + ".png"))
+        ritems.append((label, im))
+    sheet(ritems, 3, "Ответ с устройства и непрочитанные").save(
+        os.path.join(out, "gallery_reply.png"))
 
     titems = []
     for fname, label, fn in TICKER_SCREENS:
