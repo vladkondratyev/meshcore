@@ -116,26 +116,119 @@ def layout_phrases(d, ph):
     return slots, page + 1
 
 
-def scr_phrases(d, lang="en", target="#Squad North", sel=0):
+def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False):
     L = LANG[lang]
     ph = L["phrases"]
     slots, pages = layout_phrases(d, ph)
-    page = 0 if sel == 0 else slots[sel - 1][0]
+    fp = 2 if morse else 1
+    page = 0 if sel < fp else slots[sel - fp][0]
     title(d, target, "%d/%d" % (page + 1, pages))
     w = d.width()
     half = w // 2
     if page == 0:
-        cell(d, 2, 15, w - 4, L["keyboard"], sel == 0, True)
+        if morse:
+            cell(d, 2, 15, half - 4, "клавиши" if lang == "ru" else "keys", sel == 0, True)
+            cell(d, half + 2, 15, half - 4, "морзе" if lang == "ru" else "morse", sel == 1, True)
+        else:
+            cell(d, 2, 15, w - 4, L["keyboard"], sel == 0, True)
     for i, p in enumerate(ph):
         pg, row, col, wide = slots[i]
         if pg != page:
             continue
         y = 15 + row * 12
         if wide:
-            cell(d, 2, y, w - 4, p, sel == i + 1, True)
+            cell(d, 2, y, w - 4, p, sel == i + fp, True)
         else:
-            cell(d, col * half + 2, y, half - 4, p, sel == i + 1, True)
+            cell(d, col * half + 2, y, half - 4, p, sel == i + fp, True)
 
+
+def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300):
+    ro.home_header(d, "TICKER")
+    w = d.width()
+    rows = [("Msg scroll", "ON" if scroll else "OFF"), ("Morse input", "ON" if morse else "OFF"),
+            ("Morse dash", "%dms" % dash)]
+    d.setTextSize(1)
+    for i, (l, r) in enumerate(rows):
+        y = 20 + i * 11
+        d.setColor(WHITE)
+        if edit and i == row:
+            d.fillRect(0, y - 1, w, 10); d.setColor(BLACK)
+        d.setCursor(2, y); d.print(l)
+        d.setCursor(w - 2 - d.getTextWidth(r), y); d.print(r)
+    d.setColor(WHITE)
+    d.drawTextCentered(w // 2, 64 - 11, "hold:change 3x:done" if edit else "settings: " + ro.PRESS_LABEL)
+
+
+MORSE_RU = [(".-", "а"), ("-...", "б"), (".--", "в"), ("--.", "г"), ("-..", "д"), (".", "е"),
+            ("...-", "ж"), ("--..", "з"), ("..", "и"), (".---", "й"), ("-.-", "к"), (".-..", "л"),
+            ("--", "м"), ("-.", "н"), ("---", "о"), (".--.", "п"), (".-.", "р"), ("...", "с"),
+            ("-", "т"), ("..-", "у"), ("..-.", "ф"), ("....", "х"), ("-.-.", "ц"), ("---.", "ч"),
+            ("----", "ш"), ("--.-", "щ"), ("--.--", "ъ"), ("-.--", "ы"), ("-..-", "ь"), ("..-..", "э"),
+            ("..--", "ю"), (".-.-", "я")]
+MORSE_EN = [(".-", "a"), ("-...", "b"), ("-.-.", "c"), ("-..", "d"), (".", "e"), ("..-.", "f"),
+            ("--.", "g"), ("....", "h"), ("..", "i"), (".---", "j"), ("-.-", "k"), (".-..", "l"),
+            ("--", "m"), ("-.", "n"), ("---", "o"), (".--.", "p"), ("--.-", "q"), (".-.", "r"),
+            ("...", "s"), ("-", "t"), ("..-", "u"), ("...-", "v"), (".--", "w"), ("-..-", "x"),
+            ("-.--", "y"), ("--..", "z")]
+
+
+def scr_morse(d, lang="ru", target="@Алексей", text="", code="", live=None, note=None, warn=False,
+              crib=0, tip=0, dash=300):
+    """Morse entry: the text line, the code being keyed, what it means, hints."""
+    tbl = dict(MORSE_RU if lang == "ru" else MORSE_EN)
+    ru = lang == "ru"
+    w = d.width()
+    count = str(len(text))
+    if not text:
+        title(d, "to " + target, count)
+    else:
+        d.setTextSize(1); d.setColor(WHITE)
+        d.setCursor(w - d.getTextWidth(count) - 1, 0); d.print(count)
+        d.setCursor(0, 0); d.print(d.translate(text + "_", 64))
+        d.drawRect(0, 11, w, 1)
+    d.setColor(WHITE)
+    x = 2
+    for ch in code:
+        ww = 12 if ch == "-" else 4
+        d.fillRect(x, 17, ww, 4); x += ww + 4
+    cur = code
+    if live is not None:
+        ww = 12 if live else 4
+        d.drawRect(x, 17, ww, 4); x += ww + 4
+        cur += "-" if live else "."
+    if cur:
+        now = tbl.get(cur, "?")
+        line = "= " + now
+        tw = d.getTextWidth(d.translate(line, 20))
+        d.setCursor(w - tw - 1, 15); d.print(d.translate(line, 20))
+        a, b = tbl.get(cur + ".", "-"), tbl.get(cur + "-", "-")
+        d.drawTextCentered(w // 2, 27, d.translate("+. %s   +- %s" % (a, b), 40))
+    else:
+        d.drawTextCentered(w // 2, 15, d.translate(
+            ("точка < %d мс < тире" if ru else "dot < %dms < dash") % dash, 40))
+        d.drawTextCentered(w // 2, 27, d.translate("держать 2 с: выход" if ru else "hold 2s: exit", 40))
+    if note:
+        d.drawTextCentered(w // 2, 39, d.translate(note, 48))
+    else:
+        items = (MORSE_RU if ru else MORSE_EN)[crib * 3:crib * 3 + 3]
+        d.drawTextCentered(w // 2, 39, d.translate(" ".join(o + c for c, o in items), 48))
+    tips = ([".-.-. отправить", "-...- пробел", "........ стереть", "пауза: пробел"] if ru
+            else [".-.-. send", "-...- space", "........ erase", "long pause: space"])
+    d.drawTextCentered(w // 2, 52, d.translate(tips[tip], 40))
+
+
+MORSE_SCREENS = [
+    ("90_msg_settings", "Настройки: удержание — открыть", scr_msg_settings),
+    ("91_msg_settings_edit", "Морзе вкл/выкл", lambda d: scr_msg_settings(d, True, 1)),
+    ("92_msg_settings_dash", "Порог тире: 200…800 мс", lambda d: scr_msg_settings(d, True, 2)),
+    ("93_phrases_morse", "Рядом с клавишами — морзе", lambda d: scr_phrases(d, "ru", "@Алексей", sel=1, morse=True)),
+    ("94_morse_idle", "Морзе: подсказки и азбука", lambda d: scr_morse(d, crib=5)),
+    ("95_morse_keying", "Нажато .-. — это «р»", lambda d: scr_morse(d, text="пр", code=".-.", tip=1)),
+    ("96_morse_live", "Держите дольше 300 мс — тире", lambda d: scr_morse(d, text="пр", code=".-", live=1, tip=2)),
+    ("97_morse_unknown", "Такого знака нет: ничего не вписано",
+     lambda d: scr_morse(d, text="привет", note="..--.- ? нет знака", tip=0)),
+    ("98_morse_en", "set lang en: латиница", lambda d: scr_morse(d, "en", "@Alexey", text="hi", code="--.", tip=0)),
+]
 
 NEIGHBORS = [("Repeater South", 9.25), ("Hill-2", 4.75), ("A3F09C12", -3.25), ("Bridge", -8.75),
              ("Tower East", -10.5), ("Base Camp", -12.0), ("Fox", -14.25)]
@@ -330,8 +423,8 @@ NEIGHBOR_SCREENS = [
 ]
 
 TICKER_SCREENS = [
-    ("50_ticker_on", "Msg scroll: ON", scr_ticker_page),
-    ("51_ticker_off", "Msg scroll: OFF", lambda d: scr_ticker_page(d, False)),
+    ("50_ticker_on", "Msg scroll: ON", lambda d: scr_msg_settings(d, morse=False)),
+    ("51_ticker_off", "Msg scroll: OFF", lambda d: scr_msg_settings(d, True, 0, scroll=False, morse=False)),
 ]
 
 # ------------------------------------------------------------ running line
@@ -492,6 +585,15 @@ def main():
         im.save(os.path.join(out, "sent", fname + ".png"))
         sitems.append((label, im))
     sheet(sitems, 2, "Sent — отправленные с устройства").save(os.path.join(out, "gallery_sent.png"))
+
+    mitems = []
+    os.makedirs(os.path.join(out, "morse"), exist_ok=True)
+    for fname, label, fn in MORSE_SCREENS:
+        d = Dev(); fn(d)
+        im = to_image(d)
+        im.save(os.path.join(out, "morse", fname + ".png"))
+        mitems.append((label, im))
+    sheet(mitems, 3, "Морзе и настройки сообщений").save(os.path.join(out, "gallery_morse.png"))
 
     titems = []
     for fname, label, fn in TICKER_SCREENS:
