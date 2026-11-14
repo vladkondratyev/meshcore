@@ -250,7 +250,8 @@ class HomeScreen : public UIScreen {
   bool _msg_edit = false;    // Msg scroll page: changing settings
 
   // Msg scroll page: running line, Morse entry and the dash time in one place
-  #define MSG_SET_ROWS 3
+  #define MSG_SET_ROWS 5
+  #define MSG_SET_SHOWN 3
   void changeMsgSetting() {
     if (!_node_prefs) return;
     if (_msg_row == 0) {
@@ -259,6 +260,10 @@ class HomeScreen : public UIScreen {
     }
     if (_msg_row == 1) {
       _node_prefs->morse_input = _node_prefs->morse_input ? 0 : 1;
+    } else if (_msg_row == 3) {
+      _node_prefs->kb_layout = _node_prefs->kb_layout ? 0 : 1;
+    } else if (_msg_row == 4) {
+      _node_prefs->auto_caps = _node_prefs->auto_caps ? 0 : 1;
     } else {
       static const uint16_t steps[] = { 200, 250, 300, 350, 400, 500, 600, 800 };
       const int n = sizeof(steps) / sizeof(steps[0]);
@@ -1165,12 +1170,18 @@ public:
       bool morse = _task->morseEnabled();
       char dash[16];
       snprintf(dash, sizeof(dash), "%lums", _task->morseDashMs());
-      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Morse input", "Morse dash" };
-      const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", morse ? "ON" : "OFF", dash };
+      bool ru = _task->langRu();
+      const char* layout = _task->kbFreqLayout() ? (ru ? "частотн." : "freq") : (ru ? "ЙЦУКЕН" : "QWERTY");
+      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Morse input", "Morse dash", "Keys layout", "Auto caps" };
+      const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", morse ? "ON" : "OFF", dash,
+                                           layout, _task->autoCaps() ? "ON" : "OFF" };
       display.setTextSize(1);
-      for (int i = 0; i < MSG_SET_ROWS; i++) {
-        int y = 20 + i * 11;
-        bool off = (i < 2 && strcmp(rows_r[i], "OFF") == 0) || (i == 2 && !morse);
+      // three rows on screen; the window follows the cursor
+      int top = 0;
+      if (_msg_edit && _msg_row >= MSG_SET_SHOWN) top = _msg_row - MSG_SET_SHOWN + 1;
+      for (int i = top; i < top + MSG_SET_SHOWN && i < MSG_SET_ROWS; i++) {
+        int y = 20 + (i - top) * 11;
+        bool off = strcmp(rows_r[i], "OFF") == 0 || (i == 2 && !morse);
         display.setColor(UIColor::primary_txt);
         if (_msg_edit && (uint8_t)i == _msg_row) {
           display.fillRect(0, y - 1, display.width(), 10);
@@ -1179,8 +1190,12 @@ public:
           display.setColor(UIColor::secondary_txt);
         }
         display.drawTextLeftAlign(2, y, rows_l[i]);
-        display.drawTextRightAlign(display.width() - 2, y, rows_r[i]);
+        display.drawTextRightAlign(display.width() - 3, y, rows_r[i]);
       }
+      // scroll bar on the right edge: where the three rows are among all five
+      display.setColor(UIColor::secondary_txt);
+      int bar_h = 32 * MSG_SET_SHOWN / MSG_SET_ROWS;
+      display.fillRect(display.width() - 1, 19 + 32 * top / MSG_SET_ROWS, 1, bar_h);
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 64 - 11,
                                _msg_edit ? "hold:change 3x:done" : "settings: " PRESS_LABEL);
@@ -2250,6 +2265,7 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+  if (curr == compose && c != compose && compose) ((ComposeScreen*)compose)->onLeave();
   curr = c;
   _next_refresh = 100;
   if (c == home) _idle_since = millis();

@@ -2550,7 +2550,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set morse on|off, set morse.dash MS, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set morse on|off, set morse.dash MS, set kb std|freq, set caps on|off, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -2613,6 +2613,32 @@ void MyMesh::runCLICommand(char* command, Print& out) {
         snprintf(line, sizeof(line), "%d%s %s\n", i + 1, uiPhraseCustom(i) ? "*" : "", uiPhrase(i));
         out.print(line);
       }
+    } else if ((memcmp(command, "set kb", 6) == 0 && (command[6] == 0 || command[6] == ' ')) ||
+               (memcmp(command, "set caps", 8) == 0 && (command[8] == 0 || command[8] == ' '))) {
+      // set kb std|freq: keyboard layout; set caps on|off: automatic capitals
+      bool kb = command[5] == 'b';
+      const char* arg = &command[kb ? 6 : 8];
+      while (*arg == ' ') arg++;
+      if (kb) {
+        if (strcmp(arg, "std") == 0 || strcmp(arg, "freq") == 0) {
+          _prefs.kb_layout = strcmp(arg, "freq") == 0 ? 1 : 0;
+          savePrefs();
+        } else if (*arg) {
+          out.print("  Error: set kb std|freq\n");
+          return;
+        }
+        snprintf(line, sizeof(line), "  > kb is %s\n", _prefs.kb_layout ? "freq" : "std");
+      } else {
+        if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+          _prefs.auto_caps = strcmp(arg, "on") == 0 ? 1 : 0;
+          savePrefs();
+        } else if (*arg) {
+          out.print("  Error: set caps on|off\n");
+          return;
+        }
+        snprintf(line, sizeof(line), "  > caps is %s\n", _prefs.auto_caps ? "on" : "off");
+      }
+      out.print(line);
     } else if (memcmp(command, "set morse", 9) == 0 && (command[9] == 0 || command[9] == ' ' || command[9] == '.')) {
       // set morse on|off, set morse.dash 100..1000 (ms: shorter is a dot)
       if (memcmp(&command[9], ".dash", 5) == 0) {

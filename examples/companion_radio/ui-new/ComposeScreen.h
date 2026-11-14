@@ -9,13 +9,16 @@
 //   hold   - choose (COMPOSE_HOLD_MILLIS here, shorter than elsewhere)
 // Keyboard:
 //   click  - right    double - left    triple - down    quad - up
-//   five   - leave without sending     hold - type the key
+//   five   - leave (the text stays as a draft)   hold - type the key
+// Keyboard rows: 3 rows of letters (or signs after "#+"), a row of two word
+// suggestions, a row of wide keys: space, #+, del, SEND.
 
 #include "UITask.h"
 #include "../MyMesh.h"
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/TxtDataHelpers.h>
 #include "MorseTables.h"
+#include "WordHints.h"
 
 #ifndef COMPOSE_MAX_TEXT
   #define COMPOSE_MAX_TEXT  120
@@ -30,28 +33,31 @@
 class ComposeScreen : public UIScreen {
   enum Mode : uint8_t { PICK, PHRASE, KEYS, MORSE, RESULT };
 
-  // keyboard: 4 rows of keys, then one row of wide keys.
+  // keyboard: 3 rows of keys, a row of word suggestions, a row of wide keys.
   // English: 10 keys a row. Russian (`set lang ru`): 12 keys a row, all 33 letters.
+  // Layout "std" is ЙЦУКЕН / QWERTY; "freq" puts frequent letters close together
+  // and close to the space key, which saves button presses.
   #define KB_ROWS   5
+  #define KB_KEY_ROWS  3
+  #define KB_HINT_ROW  3
   #define KB_ACTION_ROW  4
   #define KB_MAX_COLS  12
   bool ru() const { return _task->langRu(); }
   int cols() const { return ru() ? 12 : 10; }
+  bool _sym = false;   // the key rows show digits and signs
   // UTF-8 string of one row; every key is one letter
   const char* keyRow(int r) const {
-    static const char* const en[KB_ACTION_ROW] = {
-      "1234567890",
-      "qwertyuiop",
-      "asdfghjkl?",
-      "zxcvbnm,.!",
-    };
-    static const char* const rus[KB_ACTION_ROW] = {
-      "1234567890.,",
-      "йцукенгшщзхъ",
-      "фывапролджэ!",
-      "ячсмитьбюё?:",
-    };
-    return ru() ? rus[r] : en[r];
+    static const char* const en_std[KB_KEY_ROWS]  = { "qwertyuiop", "asdfghjkl.", "zxcvbnm,?!" };
+    static const char* const en_freq[KB_KEY_ROWS] = { "itsup?qkyc", "aeolg.!vfd", "hnrw,xzjbm" };
+    static const char* const ru_std[KB_KEY_ROWS]  = { "йцукенгшщзхъ", "фывапролджэ.", "ячсмитьбюё,?" };
+    static const char* const ru_freq[KB_KEY_ROWS] = { "таилячшфэжзп", "ноеруб.щц,гм", "ксвдьх?ъёюйы" };
+    static const char* const en_sym[KB_KEY_ROWS]  = { "1234567890", "-+=/()@#%&", "!?:;\"'*_~$" };
+    static const char* const ru_sym[KB_KEY_ROWS]  = { "1234567890.,", "-+=/()@#%&*_", "!?:;\"'~$<>[]" };
+    if (r < 0 || r >= KB_KEY_ROWS) return "";
+    if (_sym) return ru() ? ru_sym[r] : en_sym[r];
+    bool freq = _task->kbFreqLayout();
+    if (ru()) return freq ? ru_freq[r] : ru_std[r];
+    return freq ? en_freq[r] : en_std[r];
   }
   // copies key c of row r (one UTF-8 letter) into buf
   void keyAt(int r, int c, char* buf) const {
@@ -67,18 +73,206 @@ class ComposeScreen : public UIScreen {
     }
     buf[n] = 0;
   }
-  enum Action : uint8_t { ACT_SPACE, ACT_DEL, ACT_SEND, ACT_COUNT };
-  // first column each wide key covers, and its label
+  enum Action : uint8_t { ACT_SPACE, ACT_SYM, ACT_DEL, ACT_SEND, ACT_COUNT };
+  // first column each wide key covers
   int actionCol(int a) const {
-    static const int c10[ACT_COUNT + 1] = { 0, 4, 7, 10 };
-    static const int c12[ACT_COUNT + 1] = { 0, 5, 8, 12 };
+    static const int c10[ACT_COUNT + 1] = { 0, 3, 5, 7, 10 };
+    static const int c12[ACT_COUNT + 1] = { 0, 4, 6, 9, 12 };
     return ru() ? c12[a] : c10[a];
   }
-  static const char* actionLabel(int a) { static const char* const l[ACT_COUNT] = { "space", "del", "SEND" }; return l[a]; }
+  const char* actionLabel(int a) const {
+    if (a == ACT_SYM) return _sym ? (ru() ? "абв" : "abc") : "#+";
+    static const char* const l[ACT_COUNT] = { "space", "#+", "del", "SEND" };
+    return l[a];
+  }
   int actionAt(int col) const {
     for (int a = ACT_COUNT - 1; a >= 0; a--) if (col >= actionCol(a)) return a;
     return 0;
   }
+  // the suggestion row has two halves; the cursor column picks one
+  int hintAt(int col) const { return col < cols() / 2 ? 0 : 1; }
+
+  // ------------------------------------------------------------ word suggestions
+  char _hint[2][40];
+
+  // byte offset where the word being typed starts
+  int wordStart() const {
+    int i = _len;
+    while (i > 0 && _text[i - 1] != ' ') i--;
+    return i;
+  }
+
+  bool hintTaken(const char* w) const {
+    for (int k = 0; k < 2; k++) {
+      if (!_hint[k][0]) continue;
+      const char* a = _hint[k];
+      const char* b = w;
+      // case-blind equal
+      while (*a && *b) {
+        uint32_t x, y;
+        a = u8next(a, x); b = u8next(b, y);
+        if (cpLower(x) != cpLower(y)) break;
+        if (!*a && !*b) return true;
+      }
+    }
+    return false;
+  }
+
+  void offerHint(const char* w, int n) {
+    if (n <= 0 || n >= (int)sizeof(_hint[0])) return;
+    char word[40];
+    memcpy(word, w, n);
+    word[n] = 0;
+    if (hintTaken(word)) return;
+    for (int k = 0; k < 2; k++) {
+      if (!_hint[k][0]) { memcpy(_hint[k], word, n + 1); return; }
+    }
+  }
+
+  // two words that start with what is being typed: first from what this device
+  // sent before, newest first, then from the built-in list
+  void updateHints() {
+    _hint[0][0] = _hint[1][0] = 0;
+    if (_sym) return;
+    int ws = wordStart();
+    int plen = _len - ws;
+    if (plen <= 0) return;
+    const char* prefix = &_text[ws];
+    SentLog& log = _task->sentLog();
+    for (int i = 0; i < log.count() && !_hint[1][0]; i++) {
+      const char* t = log.get(i)->text;
+      while (*t && !_hint[1][0]) {
+        while (*t == ' ') t++;
+        const char* e = t;
+        while (*e && *e != ' ') e++;
+        // drop trailing signs
+        const char* end = e;
+        while (end > t && (end[-1] == '.' || end[-1] == ',' || end[-1] == '!' || end[-1] == '?' || end[-1] == ':')) end--;
+        if (end > t) {
+          char word[40];
+          int n = end - t;
+          if (n < (int)sizeof(word)) {
+            memcpy(word, t, n);
+            word[n] = 0;
+            if (wordExtends(word, prefix, plen)) offerHint(word, n);
+          }
+        }
+        t = e;
+      }
+    }
+    const char* const* dict = ru() ? WORDS_RU : WORDS_EN;
+    int nd = ru() ? sizeof(WORDS_RU) / sizeof(WORDS_RU[0]) : sizeof(WORDS_EN) / sizeof(WORDS_EN[0]);
+    for (int i = 0; i < nd && !_hint[1][0]; i++) {
+      if (wordExtends(dict[i], prefix, plen)) offerHint(dict[i], strlen(dict[i]));
+    }
+  }
+
+  // replace the word being typed with suggestion k and put a space after it
+  void takeHint(int k) {
+    if (!_hint[k][0]) return;
+    int ws = wordStart();
+    bool cap = false;
+    if (ws < _len) {
+      uint32_t cp;
+      u8next(&_text[ws], cp);
+      cap = cp != cpLower(cp);   // the typed word starts with a capital
+    }
+    char word[48];
+    int n = 0;
+    const char* h = _hint[k];
+    bool first = true;
+    while (*h && n < (int)sizeof(word) - 4) {
+      uint32_t cp;
+      h = u8next(h, cp);
+      if (first && cap) cp = cpUpper(cp);
+      first = false;
+      n += u8put(&word[n], cp);
+    }
+    word[n] = 0;
+    if (ws + n + 1 > COMPOSE_MAX_TEXT) { _task->showAlert("Too long", 800); return; }
+    memcpy(&_text[ws], word, n);
+    _len = ws + n;
+    _text[_len++] = ' ';
+    _text[_len] = 0;
+    updateHints();
+  }
+
+  // ------------------------------------------------------------ capitals
+  // the next letter is a capital: at the start and after . ! ? and a space
+  bool capsPending() const {
+    if (!_task->autoCaps() || _sym) return false;
+    if (_len == 0) return true;
+    if (_text[_len - 1] != ' ') return false;
+    int i = _len - 1;
+    while (i > 0 && _text[i - 1] == ' ') i--;
+    if (i == 0) return true;
+    char c = _text[i - 1];
+    return c == '.' || c == '!' || c == '?';
+  }
+
+  // key label as typed now: a capital while one is due
+  void shownKey(const char* key, char* out) const {
+    if (!*key) { out[0] = 0; return; }
+    uint32_t cp;
+    const char* e = u8next(key, cp);
+    if (capsPending() && cpIsLetter(cp)) {
+      int n = u8put(out, cpUpper(cp));
+      strcpy(&out[n], e);
+    } else {
+      strcpy(out, key);
+    }
+  }
+
+  // ------------------------------------------------------------ drafts
+  // Text typed for a recipient and not sent stays here until it is sent or
+  // the device restarts; it comes back when the keyboard or Morse opens.
+  #define COMPOSE_DRAFTS 4
+  struct Draft { ComposeTarget to; char text[COMPOSE_MAX_TEXT + 1]; };
+  Draft _drafts[COMPOSE_DRAFTS];
+  int _ndrafts = 0;
+  bool _typed = false;   // _text was typed (keyboard or Morse), not a phrase
+
+  int findDraft(const ComposeTarget& t) const {
+    for (int i = 0; i < _ndrafts; i++) if (_drafts[i].to.same(t)) return i;
+    return -1;
+  }
+
+  void clearDraft(const ComposeTarget& t) {
+    int i = findDraft(t);
+    if (i < 0) return;
+    for (; i < _ndrafts - 1; i++) _drafts[i] = _drafts[i + 1];
+    _ndrafts--;
+  }
+
+  void saveDraft() {
+    if (!_typed || _target < 0) return;
+    const ComposeTarget& t = _t[_target];
+    clearDraft(t);
+    if (_len == 0) return;
+    if (_ndrafts == COMPOSE_DRAFTS) _ndrafts--;   // the oldest goes
+    for (int i = _ndrafts; i > 0; i--) _drafts[i] = _drafts[i - 1];
+    _drafts[0].to = t;
+    StrHelper::strncpy(_drafts[0].text, _text, sizeof(_drafts[0].text));
+    _ndrafts++;
+  }
+
+  // the keyboard or Morse opens: bring the draft back if nothing is typed yet
+  void startTyping() {
+    if (!_typed && _target >= 0) {
+      _len = 0;
+      _text[0] = 0;
+      int i = findDraft(_t[_target]);
+      if (i >= 0) {
+        StrHelper::strncpy(_text, _drafts[i].text, sizeof(_text));
+        _len = strlen(_text);
+        _task->showAlert(ru() ? "Черновик" : "Draft", 900);
+      }
+    }
+    _typed = true;
+    updateHints();
+  }
+
+  unsigned long _keys_hint_until = 0;   // the button legend shows in the title until then
 
   // stock phrases (UiPhrases.h) or the ones set from the console. Screen 1
   // has the keyboard button on top and 3 rows of phrases below it, further
@@ -270,6 +464,10 @@ private:
     }
     if (_sent) rememberRecent(_t[_target]);
     logSent(again);
+    if (_typed) {
+      if (_sent) clearDraft(_t[_target]);   // gone out: no draft any more
+      else saveDraft();                    // failed: keep the text for later
+    }
     _task->notify(_sent ? UIEventType::ack : UIEventType::none);
     _mode = RESULT;
     _result_at = millis();
@@ -397,8 +595,14 @@ private:
 
   // text line: the tail of the text with a cursor, or the recipient while empty
   void drawTextLine(DisplayDriver& display) {
-    char count[8];
-    snprintf(count, sizeof(count), "%d", utf8Count(_text));
+    // letters typed / letters that fit (a Russian letter takes 2 bytes)
+    char count[12];
+    int per = ru() ? 2 : 1;
+    snprintf(count, sizeof(count), "%d/%d", utf8Count(_text), utf8Count(_text) + (COMPOSE_MAX_TEXT - _len) / per);
+    if (_mode == KEYS && (long)(millis() - _keys_hint_until) < 0) {
+      drawTitle(display, ru() ? "1> 2< 3v 4^ 5:выход" : "1> 2< 3v 4^ 5:exit", NULL);
+      return;
+    }
     if (_len == 0) {
       char name[48], line[64];
       targetName(_target, name, sizeof(name));
@@ -439,11 +643,33 @@ private:
         }
         continue;
       }
+      if (r == KB_HINT_ROW) {   // two suggested words; a dim dash when there is none
+        int cur = hintAt(_col);
+        for (int k = 0; k < 2; k++) {
+          int x0 = k * w / 2, x1 = (k + 1) * w / 2;
+          char shown[48];
+          display.translateUTF8ToBlocks(shown, _hint[k][0] ? _hint[k] : "-", sizeof(shown));
+          if (!_hint[k][0] && !(_row == r && cur == k)) display.setColor(UIColor::secondary_txt);
+          drawCell(display, x0, y, x1 - x0 - 1, shown, _row == r && cur == k);
+        }
+        continue;
+      }
       for (int c = 0; c < kc; c++) {
-        char cell[5];
+        char cell[5], shown[8];
         keyAt(r, c, cell);
+        shownKey(cell, shown);
         int x0 = c * w / kc, x1 = (c + 1) * w / kc;
-        drawCell(display, x0, y, x1 - x0, cell, _row == r && _col == c);
+        drawCell(display, x0, y, x1 - x0, shown, _row == r && _col == c);
+        if (c == _col && r != _row && _row < KB_KEY_ROWS) {   // the cursor column, faintly
+          display.setColor(UIColor::secondary_txt);
+          display.fillRect(x0 + 1, y + 8, x1 - x0 - 2, 1);
+          display.setColor(UIColor::primary_txt);
+        }
+      }
+      if (r == _row) {   // the cursor row is framed
+        display.setColor(UIColor::secondary_txt);
+        display.drawRect(0, y - 1, w, 10);
+        display.setColor(UIColor::primary_txt);
       }
     }
   }
@@ -488,9 +714,11 @@ private:
   }
 
   void appendText(const char* s) {
-    int l = strlen(s);
+    char out[8];
+    shownKey(s, out);   // a capital when one is due
+    int l = strlen(out);
     if (_len + l > COMPOSE_MAX_TEXT) { morseNote("too long", true); return; }
-    memcpy(&_text[_len], s, l + 1);
+    memcpy(&_text[_len], out, l + 1);
     _len += l;
   }
 
@@ -545,6 +773,8 @@ private:
   }
 
   void enterMorse() {
+    _sym = false;
+    startTyping();
     _mode = MORSE;
     _m_n = 0;
     _m_down = _task->isButtonPressed();
@@ -697,11 +927,31 @@ private:
     display.drawTextCentered(display.width() / 2, 53, "press: back");
   }
 
+  // one letter or sign from the keyboard or Morse, a capital when one is due
+  void typeLetter(const char* key) {
+    char out[8];
+    shownKey(key, out);
+    int kl = strlen(out);
+    if (_len + kl > COMPOSE_MAX_TEXT) {
+      _task->showAlert("Too long", 800);
+      return;
+    }
+    memcpy(&_text[_len], out, kl + 1);
+    _len += kl;
+  }
+
   void typeKey() {
+    if (_row == KB_HINT_ROW) {
+      takeHint(hintAt(_col));
+      return;
+    }
     if (_row == KB_ACTION_ROW) {
       switch (actionAt(_col)) {
         case ACT_SPACE:
           if (_len > 0 && _len < COMPOSE_MAX_TEXT && _text[_len - 1] != ' ') { _text[_len++] = ' '; _text[_len] = 0; }
+          break;
+        case ACT_SYM:
+          _sym = !_sym;
           break;
         case ACT_DEL:
           while (_len > 0 && ((uint8_t)_text[_len - 1] & 0xC0) == 0x80) _len--;   // continuation bytes
@@ -712,18 +962,15 @@ private:
           while (_len > 0 && _text[_len - 1] == ' ') _text[--_len] = 0;
           if (_len > 0) send();
           else _task->showAlert("Empty", 800);
+          return;
       }
+      updateHints();
       return;
     }
     char key[5];
     keyAt(_row, _col, key);
-    int kl = strlen(key);
-    if (_len + kl > COMPOSE_MAX_TEXT) {
-      _task->showAlert("Too long", 800);
-      return;
-    }
-    memcpy(&_text[_len], key, kl + 1);
-    _len += kl;
+    typeLetter(key);
+    updateHints();
   }
 
 public:
@@ -777,6 +1024,15 @@ public:
     _len = 0;
     _text[0] = 0;
     _re[0] = 0;
+    _typed = false;
+    _sym = false;
+    _hint[0][0] = _hint[1][0] = 0;
+  }
+
+  // the Write page is left for another screen: typed text becomes a draft
+  void onLeave() {
+    if (_mode != RESULT) saveDraft();
+    _typed = false;
   }
 
   // write to a given recipient, even one that is not a favourite; the phrases
@@ -865,18 +1121,27 @@ public:
       if (next || c == KEY_DOWN) step(_sel, items, 1);
       else if (prev || c == KEY_UP) step(_sel, items, -1);
       else if (back) {
+        saveDraft();   // typed text stays with its recipient
+        _typed = false;
+        _len = 0;
+        _text[0] = 0;
         _mode = PICK;
         _sel = _target;
         _target = -1;
         _re[0] = 0;   // another recipient is not a reply
       } else if (ok) {
         if (_sel == 0) {
+          startTyping();
           _mode = KEYS;
-          _row = 1;   // letters
+          _sym = false;
+          _row = 1;   // middle letter row
           _col = 0;
+          _keys_hint_until = millis() + 2500;   // the button legend first
         } else if (isMorseItem(_sel)) {
           enterMorse();
         } else {
+          saveDraft();   // a phrase does not replace what was typed
+          _typed = false;
           StrHelper::strncpy(_text, phraseAt(_sel - firstPhrase()), sizeof(_text));
           _len = strlen(_text);
           send();
@@ -886,19 +1151,16 @@ public:
     }
 
     // keyboard: 1 click right, 2 left, 3 down, 4 up (5 leaves, see above)
-    if (c == KEY_NEXT || c == KEY_RIGHT) {
+    if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_PREV || c == KEY_LEFT) {
+      _keys_hint_until = 0;
+      int d = (c == KEY_NEXT || c == KEY_RIGHT) ? 1 : -1;
       if (_row == KB_ACTION_ROW) {
-        int a = (actionAt(_col) + 1) % ACT_COUNT;
+        int a = (actionAt(_col) + ACT_COUNT + d) % ACT_COUNT;
         _col = actionCol(a);
+      } else if (_row == KB_HINT_ROW) {
+        _col = hintAt(_col) == 0 ? cols() / 2 : 0;   // the other word
       } else {
-        step(_col, cols(), 1);
-      }
-    } else if (c == KEY_PREV || c == KEY_LEFT) {
-      if (_row == KB_ACTION_ROW) {
-        int a = (actionAt(_col) + ACT_COUNT - 1) % ACT_COUNT;
-        _col = actionCol(a);
-      } else {
-        step(_col, cols(), -1);
+        step(_col, cols(), d);
       }
     } else if (c == KEY_SELECT || c == KEY_DOWN) {
       step(_row, KB_ROWS, 1);

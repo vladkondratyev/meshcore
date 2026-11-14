@@ -77,6 +77,8 @@ public:
   uint8_t msg_ticker = MSG_TICKER_DEFAULT;  // 1 = new message runs across the screen (UI_MSG_TICKER builds)
   uint8_t morse_input = 0;       // 1 = Morse entry next to the keyboard on the Write page
   uint16_t morse_dash_ms = 300;  // a press this long or longer is a dash, shorter is a dot
+  uint8_t kb_layout = 0;         // Write keyboard: 0 = ЙЦУКЕН / QWERTY, 1 = frequent letters together
+  uint8_t auto_caps = 1;         // 1 = a capital at the start and after . ! ?
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
   uint8_t clock_nodes[CLOCK_NODE_MAX][32];  // pubkeys to poll for time; empty slots are zeros
 
@@ -170,6 +172,8 @@ private:
       def("tick", _parent->msg_ticker);   // running line for new messages
       def("morse", _parent->morse_input);  // Morse entry on the Write page
       def("mdash", _parent->morse_dash_ms); // dot/dash boundary, ms
+      def("kbl", _parent->kb_layout);       // keyboard layout
+      def("caps", _parent->auto_caps);      // automatic capitals
       def("tvalid", _parent->time_valid);
       for (int i = 0; i < CLOCK_NODE_MAX; i++) {
         char key[8];
