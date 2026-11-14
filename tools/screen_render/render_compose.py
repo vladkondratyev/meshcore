@@ -240,6 +240,19 @@ MORSE_SCREENS = [
     ("98_morse_en", "set lang en: латиница", lambda d: scr_morse(d, "en", "@Alexey", text="hi", code="--.", tip=0)),
 ]
 
+JOURNEY_SCREENS = [
+    ("01_home_unread", "1. Пришло сообщение: конверт в заголовке", lambda d: scr_home_badge(d, 1, connected=False)),
+    ("02_message", "2. Читаете. Удержание — ответить",
+     lambda d: ro.scr_message(d, "Ты где? Мы у моста", unread=1, origin="(1) Алексей:")),
+    ("03_reply_phrases", "3. RE: фраза одной кнопкой или свой текст",
+     lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=0, morse=True)),
+    ("04_reply_keys", "4. Клавиатура с подсказками слов",
+     lambda d: scr_keys(d, "ru", "@Алексей", text="Буду у мо", row=3, col=8)),
+    ("05_delivered", "5. Доставлено", lambda d: scr_result(d, "RE @Алексей", "Delivered")),
+    ("06_sent", "6. История: кому, на что, статус",
+     lambda d: scr_sent(d, "@Алексей", "1/4", "Delivered", "1m", "Буду у моста", re="Ты где? Мы у моста")),
+]
+
 NEIGHBORS = [("Repeater South", 9.25), ("Hill-2", 4.75), ("A3F09C12", -3.25), ("Bridge", -8.75),
              ("Tower East", -10.5), ("Base Camp", -12.0), ("Fox", -14.25)]
 
@@ -368,8 +381,8 @@ def badge(d, unread):
     d.setCursor(right + 12, 2); d.print(s)
 
 
-def scr_home_badge(d, unread=3):
-    ro.scr_home(d, msg=unread, unread=unread)
+def scr_home_badge(d, unread=3, connected=True):
+    ro.scr_home(d, connected=connected, msg=unread, unread=unread)
     badge(d, unread)
 
 
@@ -652,6 +665,17 @@ def main():
         im.save(os.path.join(out, "sent", fname + ".png"))
         sitems.append((label, im))
     sheet(sitems, 2, "Sent — отправленные с устройства").save(os.path.join(out, "gallery_sent.png"))
+
+    # one message from start to end, without a phone
+    jitems = []
+    os.makedirs(os.path.join(out, "autonomy"), exist_ok=True)
+    for fname, label, fn in JOURNEY_SCREENS:
+        d = Dev(); fn(d)
+        im = to_image(d)
+        im.save(os.path.join(out, "autonomy", fname + ".png"))
+        jitems.append((label, im))
+    sheet(jitems, 3, "Без телефона: пришло — прочитал — ответил — доставлено").save(
+        os.path.join(out, "gallery_autonomy.png"))
 
     mitems = []
     os.makedirs(os.path.join(out, "morse"), exist_ok=True)
