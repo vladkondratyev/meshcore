@@ -246,6 +246,29 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   uint8_t _setup_row;
   bool _setup_edit;
+  uint8_t _msg_row = 0;      // Msg scroll page: the setting under the cursor
+  bool _msg_edit = false;    // Msg scroll page: changing settings
+
+  // Msg scroll page: running line, Morse entry and the dash time in one place
+  #define MSG_SET_ROWS 3
+  void changeMsgSetting() {
+    if (!_node_prefs) return;
+    if (_msg_row == 0) {
+      _task->toggleTicker();
+      return;
+    }
+    if (_msg_row == 1) {
+      _node_prefs->morse_input = _node_prefs->morse_input ? 0 : 1;
+    } else {
+      static const uint16_t steps[] = { 200, 250, 300, 350, 400, 500, 600, 800 };
+      const int n = sizeof(steps) / sizeof(steps[0]);
+      int i = 0;
+      while (i < n && steps[i] <= _node_prefs->morse_dash_ms) i++;
+      _node_prefs->morse_dash_ms = steps[i % n];
+    }
+    the_mesh.savePrefs();
+    _task->notify(UIEventType::ack);
+  }
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
   NeighborInfo neighbor_list[NEIGHBOR_TABLE_SIZE];
@@ -1138,16 +1161,29 @@ public:
       }
 #ifdef UI_MSG_TICKER
     } else if (_page == HomePage::TICKER) {
-      bool on = _task->tickerEnabled();
+      // three settings of incoming and outgoing messages; hold to change them
+      bool morse = _task->morseEnabled();
+      char dash[16];
+      snprintf(dash, sizeof(dash), "%lums", _task->morseDashMs());
+      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Morse input", "Morse dash" };
+      const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", morse ? "ON" : "OFF", dash };
       display.setTextSize(1);
-      display.setColor(UIColor::primary_txt);
-      display.drawTextCentered(display.width() / 2, 18, "Msg scroll");
-      display.setTextSize(2);
-      display.setColor(on ? UIColor::primary_txt : UIColor::warning_txt);
-      display.drawTextCentered(display.width() / 2, 31, on ? "ON" : "OFF");
-      display.setTextSize(1);
+      for (int i = 0; i < MSG_SET_ROWS; i++) {
+        int y = 20 + i * 11;
+        bool off = (i < 2 && strcmp(rows_r[i], "OFF") == 0) || (i == 2 && !morse);
+        display.setColor(UIColor::primary_txt);
+        if (_msg_edit && (uint8_t)i == _msg_row) {
+          display.fillRect(0, y - 1, display.width(), 10);
+          display.setColor(UIColor::window_bkg);
+        } else if (off) {
+          display.setColor(UIColor::secondary_txt);
+        }
+        display.drawTextLeftAlign(2, y, rows_l[i]);
+        display.drawTextRightAlign(display.width() - 2, y, rows_r[i]);
+      }
       display.setColor(UIColor::secondary_txt);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+      display.drawTextCentered(display.width() / 2, 64 - 11,
+                               _msg_edit ? "hold:change 3x:done" : "settings: " PRESS_LABEL);
 #endif
     } else if (_page == HomePage::SHUTDOWN) {
       display.setColor(UIColor::corp_blue);
@@ -1203,6 +1239,12 @@ public:
         changeSetupValue();
         return true;
       }
+#ifdef UI_MSG_TICKER
+      if (_page == HomePage::TICKER && _msg_edit) {
+        _msg_edit = false;
+        return true;
+      }
+#endif
 #if ENV_INCLUDE_GPS == 1
       if (_page == HomePage::BEACON && the_mesh.cycleBeaconInterval()) {
         char mode[20];
@@ -1230,7 +1272,14 @@ public:
         stepSetupRow(-1);
         return true;
       }
+#ifdef UI_MSG_TICKER
+      if (_page == HomePage::TICKER && _msg_edit) {
+        _msg_row = (_msg_row + MSG_SET_ROWS - 1) % MSG_SET_ROWS;
+        return true;
+      }
+#endif
       _page = stepPage(-1);
+      _msg_edit = false;
       if (_page == HomePage::SETUP) {
         _setup_row = 0;
         _setup_edit = false;
@@ -1247,7 +1296,14 @@ public:
         stepSetupRow(1);
         return true;
       }
+#ifdef UI_MSG_TICKER
+      if (_page == HomePage::TICKER && _msg_edit) {
+        _msg_row = (_msg_row + 1) % MSG_SET_ROWS;
+        return true;
+      }
+#endif
       _page = stepPage(1);
+      _msg_edit = false;
       if (_page == HomePage::SETUP) {
         _setup_row = 0;
         _setup_edit = false;
@@ -1409,7 +1465,12 @@ public:
     }
 #ifdef UI_MSG_TICKER
     if (c == KEY_ENTER && _page == HomePage::TICKER) {
-      _task->toggleTicker();
+      if (!_msg_edit) {   // the first hold opens the settings
+        _msg_edit = true;
+        _msg_row = 0;
+      } else {
+        changeMsgSetting();
+      }
       return true;
     }
 #endif
@@ -2261,6 +2322,11 @@ void UITask::loop() {
     user_btn.setLongMillis(inCompose() && base_long > 0 ? COMPOSE_HOLD_MILLIS : base_long);
   }
   int ev = user_btn.check();
+  if (inCompose() && ((ComposeScreen*)compose)->morseActive() && _display != NULL && _display->isOn()) {
+    // Morse reads press lengths itself; clicks and holds mean nothing here
+    ((ComposeScreen*)compose)->morseButton(user_btn.isPressed());
+    ev = BUTTON_EVENT_NONE;
+  }
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {

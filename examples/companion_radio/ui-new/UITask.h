@@ -108,6 +108,12 @@ public:
 #endif
   }
   void toggleTicker();
+  // Morse entry on the Write page, set on the Msg scroll page or `set morse`
+  bool morseEnabled() const { return _node_prefs != NULL && _node_prefs->morse_input != 0; }
+  unsigned long morseDashMs() const {
+    unsigned long t = _node_prefs ? _node_prefs->morse_dash_ms : 300;
+    return t < 100 ? 100 : (t > 1000 ? 1000 : t);
+  }
   void keepDisplayAwake();
   void requestRefresh() { _next_refresh = 0; }
   void showAlert(const char* text, int duration_millis);
