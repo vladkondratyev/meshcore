@@ -6,8 +6,6 @@
 
 #define UI_PHRASE_COUNT  18
 #define UI_PHRASE_LEN    32   // bytes with the terminating zero
-#define UI_PHRASES_P1     6   // on the first screen, next to the keyboard button
-#define UI_PHRASES_PER    8   // on each further screen, 4 rows of 2
 
 static const char* const UI_PHRASES_EN[UI_PHRASE_COUNT] = {
   "ok", "ping", "yes", "no", "hello", "goodbye",

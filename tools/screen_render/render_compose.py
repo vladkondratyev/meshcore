@@ -28,12 +28,14 @@ TARGETS = ["#public", "#Squad North", "@Alexey", "@Base Camp", "@Fox"]
 # Layouts follow `set lang ru|en` (ru is the default).
 LANG = {
     "en": {"phrases": ["ok", "ping", "yes", "no", "hello", "goodbye",
-                       "on my way", "arrived", "waiting", "where?", "thanks", "soon", "call back", "SOS"],
+                       "on my way", "arrived", "waiting", "where?", "thanks", "soon", "call back", "SOS",
+                       "weather today", "weather tomorrow", "rate", "moon"],
            "rows": ["1234567890", "qwertyuiop", "asdfghjkl?", "zxcvbnm,.!"],
            "actions": [(0, "space"), (4, "del"), (7, "SEND")],
            "keyboard": "keyboard"},
     "ru": {"phrases": ["ок", "ping", "да", "нет", "привет", "пока",
-                       "в пути", "на месте", "жду", "где ты?", "спасибо", "скоро", "перезвоню", "SOS"],
+                       "в пути", "на месте", "жду", "где ты?", "спасибо", "скоро", "перезвоню", "SOS",
+                       "погода сегодня", "погода завтра", "Курс", "луна"],
            "rows": ["1234567890.,", "йцукенгшщзхъ", "фывапролджэ!", "ячсмитьбюё?:"],
            "actions": [(0, "space"), (5, "del"), (8, "SEND")],
            "keyboard": "клавиатура"},
@@ -96,20 +98,43 @@ def scr_pick(d, sel=1):
 P1 = 6  # phrases on the first screen, next to the keyboard button
 
 
+def layout_phrases(d, ph):
+    """Same as ComposeScreen::layoutPhrases: a phrase wider than half a row takes the whole row."""
+    half = d.width() // 2
+    page, row, col, slots = 0, 1, 0, []
+    for p in ph:
+        wide = d.getTextWidth(d.translate(p, 36)) > half - 6
+        if wide and col == 1:
+            row, col = row + 1, 0
+        if row > 3:
+            page, row, col = page + 1, 0, 0
+        slots.append((page, row, col, wide))
+        if wide or col == 1:
+            row, col = row + 1, 0
+        else:
+            col = 1
+    return slots, page + 1
+
+
 def scr_phrases(d, lang="en", target="#Squad North", sel=0):
     L = LANG[lang]
-    second = sel > P1
-    title(d, target, "2/2" if second else "1/2")
+    ph = L["phrases"]
+    slots, pages = layout_phrases(d, ph)
+    page = 0 if sel == 0 else slots[sel - 1][0]
+    title(d, target, "%d/%d" % (page + 1, pages))
     w = d.width()
     half = w // 2
-    ph = L["phrases"]
-    if not second:
+    if page == 0:
         cell(d, 2, 15, w - 4, L["keyboard"], sel == 0, True)
-        for i, p in enumerate(ph[:P1]):
-            cell(d, (i % 2) * half + 2, 15 + (i // 2 + 1) * 12, half - 4, p, sel == i + 1, True)
-    else:
-        for k, p in enumerate(ph[P1:]):
-            cell(d, (k % 2) * half + 2, 15 + (k // 2) * 12, half - 4, p, sel == P1 + k + 1, True)
+    for i, p in enumerate(ph):
+        pg, row, col, wide = slots[i]
+        if pg != page:
+            continue
+        y = 15 + row * 12
+        if wide:
+            cell(d, 2, y, w - 4, p, sel == i + 1, True)
+        else:
+            cell(d, col * half + 2, y, half - 4, p, sel == i + 1, True)
 
 
 NEIGHBORS = [("Repeater South", 9.25), ("Hill-2", 4.75), ("A3F09C12", -3.25), ("Bridge", -8.75),
@@ -240,6 +265,7 @@ LANG_SCREENS = [
     ("42_write_phrases", "Клавиатура и готовые фразы", lambda d, l: scr_phrases(d, l)),
     ("43_write_phrase_sel", "Выбрана фраза", lambda d, l: scr_phrases(d, l, sel=5)),
     ("43b_write_phrases_2", "Фразы, экран 2", lambda d, l: scr_phrases(d, l, sel=7)),
+    ("43c_write_phrases_3", "Фразы, экран 3", lambda d, l: scr_phrases(d, l, sel=15)),
     ("44_write_keys", "Клавиатура: пусто", lambda d, l: scr_keys(d, l)),
     ("45_write_typing", "Набор текста", lambda d, l: scr_keys(
         d, l, text={"en": "meet at 18", "ru": "у моста в 18"}[l], row=2, col=3)),

@@ -79,18 +79,35 @@ class ComposeScreen : public UIScreen {
     return 0;
   }
 
-  // stock phrases (UiPhrases.h) or the ones set from the console. The first
-  // UI_PHRASES_P1 share the screen with the keyboard button, the rest fill
-  // further screens of UI_PHRASES_PER (4 rows of 2); the focus moves on to the
-  // next screen after the last phrase of one.
+  // stock phrases (UiPhrases.h) or the ones set from the console. Screen 1
+  // has the keyboard button on top and 3 rows of phrases below it, further
+  // screens 4 rows. A phrase that fits half the width shares its row, a longer
+  // one takes the whole row. The focus moves on to the next screen after the
+  // last phrase of one; the layout is worked out when drawing.
   static int numPhrases() { return UI_PHRASE_COUNT; }
   static const char* phraseAt(int i) { return the_mesh.uiPhrase(i); }
-  static int phrasePages() {
-    return 1 + (UI_PHRASE_COUNT - UI_PHRASES_P1 + UI_PHRASES_PER - 1) / UI_PHRASES_PER;
-  }
-  // screen of PHRASE item sel (0 = keyboard button, phrase i is item i + 1)
-  static int phrasePageOf(int sel) {
-    return sel <= UI_PHRASES_P1 ? 0 : 1 + (sel - 1 - UI_PHRASES_P1) / UI_PHRASES_PER;
+
+  struct Slot { uint8_t page, row, col, wide; };   // col 0 left, 1 right
+  Slot _slot[UI_PHRASE_COUNT];
+  int _pages = 1;
+
+  void layoutPhrases(DisplayDriver& display) {
+    int half = display.width() / 2;
+    int page = 0, row = 1, col = 0;   // row 0 of screen 1 is the keyboard button
+    char shown[UI_PHRASE_LEN + 4];
+    for (int i = 0; i < numPhrases(); i++) {
+      display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
+      bool wide = display.getTextWidth(shown) > half - 6;
+      if (wide && col == 1) { row++; col = 0; }   // a wide one starts a fresh row
+      if (row > 3) { page++; row = 0; col = 0; }
+      _slot[i].page = page;
+      _slot[i].row = row;
+      _slot[i].col = col;
+      _slot[i].wide = wide;
+      if (wide || col == 1) { row++; col = 0; }
+      else col = 1;
+    }
+    _pages = page + 1;
   }
 
   static int utf8Count(const char* s) {
@@ -337,29 +354,27 @@ private:
     }
   }
 
-  // screen 1: the keyboard entry on top (item 0), phrases below in two columns;
-  // further screens: the next phrases, 4 rows of 2. The title shows 1/3, 2/3...
+  // screen 1: the keyboard button on top (item 0), phrases below;
+  // further screens: the next phrases. The title shows 1/3, 2/3...
   void drawPhrases(DisplayDriver& display) {
-    int page = phrasePageOf(_sel);
+    layoutPhrases(display);
+    int page = _sel == 0 ? 0 : _slot[_sel - 1].page;
     char name[56], pos[8];
     titleName(name, sizeof(name));
-    snprintf(pos, sizeof(pos), "%d/%d", page + 1, phrasePages());
+    snprintf(pos, sizeof(pos), "%d/%d", page + 1, _pages);
     drawTitle(display, name, pos);
-    int half = display.width() / 2;
+    int w = display.width(), half = w / 2;
     char shown[UI_PHRASE_LEN + 4];
     if (page == 0) {
-      drawCell(display, 2, 15, display.width() - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
-      for (int i = 0; i < UI_PHRASES_P1 && i < numPhrases(); i++) {
-        display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
-        drawCell(display, (i % 2) * half + 2, 15 + (i / 2 + 1) * 12, half - 4, shown, _sel == i + 1, true);
-      }
-    } else {
-      int from = UI_PHRASES_P1 + (page - 1) * UI_PHRASES_PER;
-      for (int i = from; i < from + UI_PHRASES_PER && i < numPhrases(); i++) {
-        int k = i - from;
-        display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
-        drawCell(display, (k % 2) * half + 2, 15 + (k / 2) * 12, half - 4, shown, _sel == i + 1, true);
-      }
+      drawCell(display, 2, 15, w - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
+    }
+    for (int i = 0; i < numPhrases(); i++) {
+      const Slot& sl = _slot[i];
+      if (sl.page != page) continue;
+      display.translateUTF8ToBlocks(shown, phraseAt(i), sizeof(shown));
+      int y = 15 + sl.row * 12;
+      if (sl.wide) drawCell(display, 2, y, w - 4, shown, _sel == i + 1, true);
+      else drawCell(display, sl.col * half + 2, y, half - 4, shown, _sel == i + 1, true);
     }
   }
 

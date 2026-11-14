@@ -2600,14 +2600,14 @@ void MyMesh::runCLICommand(char* command, Print& out) {
       snprintf(line, sizeof(line), "%u\n", (unsigned)getRTCClock()->getCurrentTime());
       out.print(line);
     } else if (memcmp(command, "phrases", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
-      // phrases [screen]: one screen at a time, a console reply is short
-      int pages = 1 + (UI_PHRASE_COUNT - UI_PHRASES_P1 + UI_PHRASES_PER - 1) / UI_PHRASES_PER;
-      int page = atoi(&command[7]);
-      if (page < 1 || page > pages) page = 1;
-      int from = page == 1 ? 0 : UI_PHRASES_P1 + (page - 2) * UI_PHRASES_PER;
-      int to = page == 1 ? UI_PHRASES_P1 : from + UI_PHRASES_PER;
+      // phrases [1-3]: six at a time, a console reply is short
+      const int per = 6;
+      int groups = (UI_PHRASE_COUNT + per - 1) / per;
+      int g = atoi(&command[7]);
+      if (g < 1 || g > groups) g = 1;
+      int from = (g - 1) * per, to = from + per;
       if (to > UI_PHRASE_COUNT) to = UI_PHRASE_COUNT;
-      snprintf(line, sizeof(line), "screen %d/%d (* = yours)\n", page, pages);
+      snprintf(line, sizeof(line), "phrases %d-%d of %d (* = yours)\n", from + 1, to, UI_PHRASE_COUNT);
       out.print(line);
       for (int i = from; i < to; i++) {
         snprintf(line, sizeof(line), "%d%s %s\n", i + 1, uiPhraseCustom(i) ? "*" : "", uiPhrase(i));
