@@ -21,7 +21,7 @@ from render_oled import Oled, BLACK, WHITE, ROOT, to_image, sheet  # noqa: E402
 ro.NODE_NAME = "MeshNode"
 
 # Home pages of a T114 / Heltec V3 / V4 companion with this fork.
-PAGES = ["FIRST", "WRITE", "RECENT", "NEIGHBORS", "RADIO", "POWER", "SCAN", "FSCAN",
+PAGES = ["FIRST", "WRITE", "SENT", "RECENT", "NEIGHBORS", "RADIO", "POWER", "SCAN", "FSCAN",
          "BLUETOOTH", "GPS", "BEACON", "TICKER", "SHUTDOWN"]
 
 TARGETS = ["#public", "#Squad North", "@Alexey", "@Base Camp", "@Fox"]
@@ -134,14 +134,14 @@ def scr_neighbors(d, n=7, page=0):
     ro.name_list(d, [(nm, "%+.0f" % snr) for nm, snr in rows])
 
 
-def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0):
+def scr_keys(d, lang="en", target="#Squad North", text="", row=1, col=0, re=False):
     L = LANG[lang]
     rows, actions = L["rows"], L["actions"]
     kc = len(rows[0])
     w = d.width()
     count = str(len(text))
     if not text:
-        title(d, "to " + target, count)
+        title(d, ("RE " if re else "to ") + target, count)
     else:
         room = w - d.getTextWidth(count) - 6
         frm = 0
@@ -253,11 +253,48 @@ REPLY_SCREENS = [
     ("70_home_unread", "Главная: 3 непрочитанных", scr_home_badge),
     ("71_message", "Входящее: удержание — ответить",
      lambda d: ro.scr_message(d, "Ты где? Мы у моста", unread=3, origin="(1) Алексей:")),
-    ("72_reply_phrases", "Ответ: адресат уже выбран", lambda d: scr_phrases(d, "ru", "@Алексей", sel=0)),
-    ("73_reply_delivered", "Доставлено", lambda d: scr_result(d, "@Алексей", "Delivered")),
+    ("72_reply_phrases", "Ответ: RE и адресат в заголовке", lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=0)),
+    ("72b_reply_keys", "Ответ с клавиатуры", lambda d: scr_keys(d, "ru", "@Алексей", re=True)),
+    ("73_reply_delivered", "Доставлено", lambda d: scr_result(d, "RE @Алексей", "Delivered")),
     ("74_reply_noreply", "Нет ответа: удержание — ещё раз",
-     lambda d: scr_result(d, "@Алексей", "No reply", retry=True)),
+     lambda d: scr_result(d, "RE @Алексей", "No reply", retry=True)),
     ("75_pick_recent", "Последние адресаты сверху", scr_pick_recent),
+]
+
+def scr_sent_page(d, n=4, replies=2):
+    ro.home_header(d, "SENT")
+    w = d.width()
+    d.setColor(WHITE); d.setTextSize(1)
+    d.drawTextCentered(w // 2, 22, "Sent: %d" % n)
+    d.drawTextCentered(w // 2, 34, "replies: %d" % replies)
+    d.drawTextCentered(w // 2, 64 - 11, "open: " + ro.PRESS_LABEL)
+
+
+def scr_sent(d, target, pos, state, age, text, re=None):
+    w = d.width()
+    d.setTextSize(1); d.setColor(WHITE)
+    pw = d.getTextWidth(pos)
+    d.setCursor(w - pw - 1, 0); d.print(pos)
+    d.drawTextEllipsized(0, 0, w - pw - 4, d.translate(target, 48))
+    d.drawRect(0, 11, w, 1)
+    d.drawTextEllipsized(0, 14, w, "%s  %s ago" % (state, age))
+    y = 25
+    if re:
+        d.drawTextEllipsized(0, y, w, d.translate("RE: " + re, 60))
+        y += 11
+    d.setCursor(0, y)
+    d.printWordWrap(d.translate(text, 121), w)
+
+
+SENT_SCREENS = [
+    ("80_sent_page", "Страница Sent", scr_sent_page),
+    ("81_sent_reply_dm", "Ответ в личку: на что и статус",
+     lambda d: scr_sent(d, "@Алексей", "1/4", "Delivered", "2m", "в пути", re="Ты где? Мы у моста")),
+    ("82_sent_reply_ch", "Ответ в канал",
+     lambda d: scr_sent(d, "#Squad North", "2/4", "To channel", "15m", "жду у моста в 18:00",
+                        re="Fox: кто где?")),
+    ("83_sent_noreply", "Личное без ответа",
+     lambda d: scr_sent(d, "@Base Camp", "3/4", "No reply", "1h", "перезвоню")),
 ]
 
 NEIGHBOR_SCREENS = [
@@ -420,6 +457,15 @@ def main():
         ritems.append((label, im))
     sheet(ritems, 3, "Ответ с устройства и непрочитанные").save(
         os.path.join(out, "gallery_reply.png"))
+
+    sitems = []
+    os.makedirs(os.path.join(out, "sent"), exist_ok=True)
+    for fname, label, fn in SENT_SCREENS:
+        d = Dev(); fn(d)
+        im = to_image(d)
+        im.save(os.path.join(out, "sent", fname + ".png"))
+        sitems.append((label, im))
+    sheet(sitems, 2, "Sent — отправленные с устройства").save(os.path.join(out, "gallery_sent.png"))
 
     titems = []
     for fname, label, fn in TICKER_SCREENS:
