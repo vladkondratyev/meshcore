@@ -120,19 +120,19 @@ def layout_phrases(d, ph):
     return slots, page + 1
 
 
-def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False, smart=()):
+def scr_phrases(d, lang="en", target="#Squad North", sel=0, gps=False, smart=()):
     L = LANG[lang]
     ph = [">" + x for x in smart] + L["phrases"]
     slots, pages = layout_phrases(d, ph)
-    fp = 2 if morse else 1
+    fp = 2 if gps else 1
     page = 0 if sel < fp else slots[sel - fp][0]
     title(d, target, "%d/%d" % (page + 1, pages))
     w = d.width()
     half = w // 2
     if page == 0:
-        if morse:
+        if gps:
             cell(d, 2, 15, half - 4, "клавиши" if lang == "ru" else "keys", sel == 0, True)
-            cell(d, half + 2, 15, half - 4, "морзе" if lang == "ru" else "morse", sel == 1, True)
+            cell(d, half + 2, 15, half - 4, "моё место" if lang == "ru" else "location", sel == 1, True)
         else:
             cell(d, 2, 15, w - 4, L["keyboard"], sel == 0, True)
     for i, p in enumerate(ph):
@@ -146,14 +146,13 @@ def scr_phrases(d, lang="en", target="#Squad North", sel=0, morse=False, smart=(
             cell(d, col * half + 2, y, half - 4, p, sel == i + fp, True)
 
 
-def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300, freq=False, caps=True, lang="ru",
-                     cursor=False):
+def scr_msg_settings(d, edit=False, row=0, scroll=True, freq=False, caps=True, lang="ru", cursor=False):
     ro.home_header(d, "TICKER")
     w = d.width()
     lay = ("частотн." if lang == "ru" else "freq") if freq else ("ЙЦУКЕН" if lang == "ru" else "QWERTY")
-    rows = [("Msg scroll", "ON" if scroll else "OFF"), ("Morse input", "ON" if morse else "OFF"),
-            ("Morse dash", "%dms" % dash), ("Keys layout", lay), ("Auto caps", "ON" if caps else "OFF"),
-            ("Auto cursor", "ON" if cursor else "OFF")]
+    rows = [("Msg scroll", "ON" if scroll else "OFF"), ("Keys layout", lay),
+            ("Auto caps", "ON" if caps else "OFF"), ("Auto cursor", "ON" if cursor else "OFF")]
+    n = len(rows)
     top = row - 2 if edit and row >= 3 else 0
     d.setTextSize(1)
     for i in range(top, top + 3):
@@ -166,80 +165,23 @@ def scr_msg_settings(d, edit=False, row=0, scroll=True, morse=True, dash=300, fr
         rr = d.translate(r, 16)
         d.setCursor(w - 3 - d.getTextWidth(rr), y); d.print(rr)
     d.setColor(WHITE)
-    d.fillRect(w - 1, 19 + 32 * top // 6, 1, 32 * 3 // 6)
+    d.fillRect(w - 1, 19 + 32 * top // n, 1, 32 * 3 // n)
     d.drawTextCentered(w // 2, 64 - 11, "hold:change 3x:done" if edit else "settings: " + ro.PRESS_LABEL)
 
 
-MORSE_RU = [(".-", "а"), ("-...", "б"), (".--", "в"), ("--.", "г"), ("-..", "д"), (".", "е"),
-            ("...-", "ж"), ("--..", "з"), ("..", "и"), (".---", "й"), ("-.-", "к"), (".-..", "л"),
-            ("--", "м"), ("-.", "н"), ("---", "о"), (".--.", "п"), (".-.", "р"), ("...", "с"),
-            ("-", "т"), ("..-", "у"), ("..-.", "ф"), ("....", "х"), ("-.-.", "ц"), ("---.", "ч"),
-            ("----", "ш"), ("--.-", "щ"), ("--.--", "ъ"), ("-.--", "ы"), ("-..-", "ь"), ("..-..", "э"),
-            ("..--", "ю"), (".-.-", "я")]
-MORSE_EN = [(".-", "a"), ("-...", "b"), ("-.-.", "c"), ("-..", "d"), (".", "e"), ("..-.", "f"),
-            ("--.", "g"), ("....", "h"), ("..", "i"), (".---", "j"), ("-.-", "k"), (".-..", "l"),
-            ("--", "m"), ("-.", "n"), ("---", "o"), (".--.", "p"), ("--.-", "q"), (".-.", "r"),
-            ("...", "s"), ("-", "t"), ("..-", "u"), ("...-", "v"), (".--", "w"), ("-..-", "x"),
-            ("-.--", "y"), ("--..", "z")]
+SETTINGS_SCREENS = [
+    ("90_msg_settings", "Настройки: удержание — открыть", lambda d: scr_msg_settings(d)),
+    ("91_msg_settings_kb", "Раскладка и заглавные", lambda d: scr_msg_settings(d, True, 1)),
+    ("92_msg_settings_cursor", "Автокурсор", lambda d: scr_msg_settings(d, True, 3)),
+]
 
-
-def scr_morse(d, lang="ru", target="@Алексей", text="", code="", live=None, note=None, warn=False,
-              crib=0, tip=0, dash=300):
-    """Morse entry: the text line, the code being keyed, what it means, hints."""
-    tbl = dict(MORSE_RU if lang == "ru" else MORSE_EN)
-    ru = lang == "ru"
-    w = d.width()
-    count = str(len(text))
-    if not text:
-        title(d, "to " + target, count)
-    else:
-        d.setTextSize(1); d.setColor(WHITE)
-        d.setCursor(w - d.getTextWidth(count) - 1, 0); d.print(count)
-        d.setCursor(0, 0); d.print(d.translate(text + "_", 64))
-        d.drawRect(0, 11, w, 1)
-    d.setColor(WHITE)
-    x = 2
-    for ch in code:
-        ww = 12 if ch == "-" else 4
-        d.fillRect(x, 17, ww, 4); x += ww + 4
-    cur = code
-    if live is not None:
-        ww = 12 if live else 4
-        d.drawRect(x, 17, ww, 4); x += ww + 4
-        cur += "-" if live else "."
-    if cur:
-        now = tbl.get(cur, "?")
-        line = "= " + now
-        tw = d.getTextWidth(d.translate(line, 20))
-        d.setCursor(w - tw - 1, 15); d.print(d.translate(line, 20))
-        a, b = tbl.get(cur + ".", "-"), tbl.get(cur + "-", "-")
-        d.drawTextCentered(w // 2, 27, d.translate("+. %s   +- %s" % (a, b), 40))
-    else:
-        d.drawTextCentered(w // 2, 15, d.translate(
-            ("точка < %d мс < тире" if ru else "dot < %dms < dash") % dash, 40))
-        d.drawTextCentered(w // 2, 27, d.translate("держать 2 с: выход" if ru else "hold 2s: exit", 40))
-    if note:
-        d.drawTextCentered(w // 2, 39, d.translate(note, 48))
-    else:
-        items = (MORSE_RU if ru else MORSE_EN)[crib * 3:crib * 3 + 3]
-        d.drawTextCentered(w // 2, 39, d.translate(" ".join(o + c for c, o in items), 48))
-    tips = ([".-.-. отправить", "-...- пробел", "........ стереть", "пауза: пробел"] if ru
-            else [".-.-. send", "-...- space", "........ erase", "long pause: space"])
-    d.drawTextCentered(w // 2, 52, d.translate(tips[tip], 40))
-
-
-MORSE_SCREENS = [
-    ("90_msg_settings", "Настройки: удержание — открыть", scr_msg_settings),
-    ("91_msg_settings_edit", "Морзе вкл/выкл", lambda d: scr_msg_settings(d, True, 1)),
-    ("92_msg_settings_dash", "Порог тире: 200…800 мс", lambda d: scr_msg_settings(d, True, 2)),
-    ("92b_msg_settings_kb", "Раскладка и заглавные", lambda d: scr_msg_settings(d, True, 3)),
-    ("93_phrases_morse", "Рядом с клавишами — морзе", lambda d: scr_phrases(d, "ru", "@Алексей", sel=1, morse=True)),
-    ("94_morse_idle", "Морзе: подсказки и азбука", lambda d: scr_morse(d, crib=5)),
-    ("95_morse_keying", "Нажато .-. — это «р»", lambda d: scr_morse(d, text="пр", code=".-.", tip=1)),
-    ("96_morse_live", "Держите дольше 300 мс — тире", lambda d: scr_morse(d, text="пр", code=".-", live=1, tip=2)),
-    ("97_morse_unknown", "Такого знака нет: ничего не вписано",
-     lambda d: scr_morse(d, text="привет", note="..--.- ? нет знака", tip=0)),
-    ("98_morse_en", "set lang en: латиница", lambda d: scr_morse(d, "en", "@Alexey", text="hi", code="--.", tip=0)),
+GPS_SCREENS = [
+    ("b1_gps_key", "GPS включён: «моё место» рядом с клавишами",
+     lambda d: scr_phrases(d, "ru", "#Squad North", sel=1, gps=True)),
+    ("b2_gps_sent", "В Sent: geo:широта,долгота",
+     lambda d: scr_sent(d, "#Squad North", "1/3", "To channel", "0s", "geo:55.75210,37.61750")),
+    ("b3_gps_key_en", "set lang en: location",
+     lambda d: scr_phrases(d, "en", "@Alexey", sel=1, gps=True)),
 ]
 
 SMART_SCREENS = [
@@ -252,7 +194,7 @@ SMART_SCREENS = [
     ("a4_next_word2", "После «через » — дальше",
      lambda d: scr_keys(d, "ru", "@Алексей", text="Буду через ", row=3, col=8)),
     ("a5_settings_cursor", "Auto cursor в настройках",
-     lambda d: scr_msg_settings(d, True, 5, cursor=True)),
+     lambda d: scr_msg_settings(d, True, 3, cursor=True)),
     ("a6_save_phrase", "Из Sent: сделать фразой", lambda d: scr_save_phrase(d)),
 ]
 
@@ -261,7 +203,7 @@ JOURNEY_SCREENS = [
     ("02_message", "2. Читаете. Удержание — ответить",
      lambda d: ro.scr_message(d, "Ты где? Мы у моста", unread=1, origin="(1) Алексей:")),
     ("03_reply_phrases", "3. RE: фраза одной кнопкой или свой текст",
-     lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=2, morse=True, smart=("в пути", "на месте", "дома"))),
+     lambda d: scr_phrases(d, "ru", "RE @Алексей", sel=1, smart=("в пути", "на месте", "дома"))),
     ("04_reply_keys", "4. Клавиатура с подсказками слов",
      lambda d: scr_keys(d, "ru", "@Алексей", text="Буду у мо", row=3, col=8)),
     ("05_delivered", "5. Доставлено", lambda d: scr_result(d, "RE @Алексей", "Delivered")),
@@ -537,8 +479,8 @@ NEIGHBOR_SCREENS = [
 ]
 
 TICKER_SCREENS = [
-    ("50_ticker_on", "Msg scroll: ON", lambda d: scr_msg_settings(d, morse=False)),
-    ("51_ticker_off", "Msg scroll: OFF", lambda d: scr_msg_settings(d, True, 0, scroll=False, morse=False)),
+    ("50_ticker_on", "Msg scroll: ON", lambda d: scr_msg_settings(d)),
+    ("51_ticker_off", "Msg scroll: OFF", lambda d: scr_msg_settings(d, True, 0, scroll=False)),
 ]
 
 # ------------------------------------------------------------ running line
@@ -721,14 +663,16 @@ def main():
     sheet(jitems, 3, "Без телефона: пришло — прочитал — ответил — доставлено").save(
         os.path.join(out, "gallery_autonomy.png"))
 
-    mitems = []
-    os.makedirs(os.path.join(out, "morse"), exist_ok=True)
-    for fname, label, fn in MORSE_SCREENS:
-        d = Dev(); fn(d)
-        im = to_image(d)
-        im.save(os.path.join(out, "morse", fname + ".png"))
-        mitems.append((label, im))
-    sheet(mitems, 3, "Морзе и настройки сообщений").save(os.path.join(out, "gallery_morse.png"))
+    for name, title_, screens in (("settings", "Настройки сообщений", SETTINGS_SCREENS),
+                                  ("gps", "Моё место: координаты одной кнопкой", GPS_SCREENS)):
+        items = []
+        os.makedirs(os.path.join(out, name), exist_ok=True)
+        for fname, label, fn in screens:
+            d = Dev(); fn(d)
+            im = to_image(d)
+            im.save(os.path.join(out, name, fname + ".png"))
+            items.append((label, im))
+        sheet(items, 3, title_).save(os.path.join(out, "gallery_%s.png" % name))
 
     titems = []
     for fname, label, fn in TICKER_SCREENS:
