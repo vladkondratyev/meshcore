@@ -1,12 +1,15 @@
 Прошивка companion для **Heltec T114, V3 и V4** на основе [TERMIN36/MeshCore](https://github.com/TERMIN36/MeshCore). Как пользоваться: [README](https://github.com/vladkondratyev/meshcore#readme).
 
-## Что нового в v1.17.1-0.1.11
+## Что нового в v1.17.1-0.1.12
 
-- **Моё место.** Если GPS включён, на первом экране фраз рядом с клавиатурой появляется клавиша `моё место` (`location`): удержание отправляет координаты `geo:широта,долгота`, приложение показывает их ссылкой на карту. Без фикса GPS ничего не уходит, на экране `Нет GPS-фикса`.
-- **Морзе убран.** Ввода азбукой Морзе больше нет, на первом экране фраз снова одна кнопка `клавиатура` (или `клавиши` и `моё место` при включённом GPS). Настройки `Morse input`, `Morse dash` и команды `set morse` удалены.
-- **Ещё 16 плат с экраном и одной кнопкой:** Heltec V2, V4 R8 (OLED и TFT), Wireless Tracker, Tracker V2, T190, LilyGO T3S3 (SX1262 и SX1276), T-Beam (SX1262 и SX1276), T-Beam S3 Supreme, T-LoRa V2.1, RAK4631 с OLED, Station G2, Nano G2 Ultra, ThinkNode M2, Xiao S3 Wio. Эти сборки собраны автоматически, на самих платах не проверялись.
+- **Реле: умные выключатели.** Устройство включает и выключает насос, свет, ворота. Bluetooth-модули LCTech (JDY-16 / JDY-33) в `_ble`-сборках, Shelly Gen1/Gen2/Gen3 и Tasmota по Wi‑Fi в `_wifi`-сборках (ESP32). Страница **Relays** в меню: удержание — вкл/выкл, «Найти реле» ищет Bluetooth-модули рядом и добавляет их без телефона. Команды `relays`, `relay add`, `relay 1 on`. По mesh: доверенный контакт пишет `реле насос вкл` и получает ответ `реле 1 насос: ВКЛ` (включается командами `relay allow Имя` и `relay mesh on`). Как настроить — в [README](https://github.com/vladkondratyev/meshcore#реле-умные-выключатели).
+- **Моё место.** Если GPS включён, рядом с клавиатурой клавиша `моё место` (`location`): удержание отправляет `geo:широта,долгота`. Без фикса — `Нет GPS-фикса`.
+- **Морзе убран.** Ввода азбукой Морзе больше нет, его настройки и команды удалены.
+- **Ещё 16 плат с экраном и одной кнопкой:** Heltec V2, V4 R8 (OLED и TFT), Wireless Tracker, Tracker V2, T190, LilyGO T3S3 (SX1262 и SX1276), T-Beam (SX1262 и SX1276), T-Beam S3 Supreme, T-LoRa V2.1, RAK4631 с OLED, Station G2, Nano G2 Ultra, ThinkNode M2, Xiao S3 Wio. Собраны автоматически, на самих платах не проверялись.
 
-![Моё место](https://raw.githubusercontent.com/vladkondratyev/meshcore/main/docs/screens/gallery_gps.png)
+На T114 и других платах на nRF52 реле пока нет; на Station G2 реле не помещается в память.
+
+![Реле](https://raw.githubusercontent.com/vladkondratyev/meshcore/main/docs/screens/gallery_relays.png)
 
 ## Что было в 0.1.10
 
