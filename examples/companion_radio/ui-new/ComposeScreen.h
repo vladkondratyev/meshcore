@@ -17,7 +17,6 @@
 #include "../MyMesh.h"
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/TxtDataHelpers.h>
-#include "MorseTables.h"
 #include "WordHints.h"
 #include "SmartReplies.h"
 
@@ -32,7 +31,7 @@
 #endif
 
 class ComposeScreen : public UIScreen {
-  enum Mode : uint8_t { PICK, PHRASE, KEYS, MORSE, RESULT };
+  enum Mode : uint8_t { PICK, PHRASE, KEYS, RESULT };
 
   // keyboard: 3 rows of keys, a row of word suggestions, a row of wide keys.
   // English: 10 keys a row. Russian (`set lang ru`): 12 keys a row, all 33 letters.
@@ -356,12 +355,12 @@ class ComposeScreen : public UIScreen {
 
   // ------------------------------------------------------------ drafts
   // Text typed for a recipient and not sent stays here until it is sent or
-  // the device restarts; it comes back when the keyboard or Morse opens.
+  // the device restarts; it comes back when the keyboard opens.
   #define COMPOSE_DRAFTS 4
   struct Draft { ComposeTarget to; char text[COMPOSE_MAX_TEXT + 1]; };
   Draft _drafts[COMPOSE_DRAFTS];
   int _ndrafts = 0;
-  bool _typed = false;   // _text was typed (keyboard or Morse), not a phrase
+  bool _typed = false;   // _text was typed (keyboard), not a phrase
 
   int findDraft(const ComposeTarget& t) const {
     for (int i = 0; i < _ndrafts; i++) if (_drafts[i].to.same(t)) return i;
@@ -387,7 +386,7 @@ class ComposeScreen : public UIScreen {
     _ndrafts++;
   }
 
-  // the keyboard or Morse opens: bring the draft back if nothing is typed yet
+  // the keyboard opens: bring the draft back if nothing is typed yet
   void startTyping() {
     if (!_typed && _target >= 0) {
       _len = 0;
@@ -718,13 +717,13 @@ private:
     }
   }
 
-  // PHRASE items: 0 the keyboard, 1 Morse (when it is on), then the phrases
-  bool morseOn() const { return _task->morseEnabled(); }
-  int firstPhrase() const { return morseOn() ? 2 : 1; }
-  bool isMorseItem(int sel) const { return morseOn() && sel == 1; }
+  // PHRASE items: 0 the keyboard, 1 my position (while GPS is on), then the phrases
+  bool gpsItem() const { return _task->gpsOn(); }
+  int firstPhrase() const { return gpsItem() ? 2 : 1; }
 
-  // screen 1: the keyboard button on top (item 0) with Morse next to it,
-  // phrases below; further screens: the next phrases. The title shows 1/3, 2/3...
+  // screen 1: the keyboard button on top (item 0) with "my position" next to
+  // it while GPS is on, phrases below;
+  // further screens: the next phrases. The title shows 1/3, 2/3...
   void drawPhrases(DisplayDriver& display) {
     layoutPhrases(display);
     int fp = firstPhrase();
@@ -736,9 +735,9 @@ private:
     int w = display.width(), half = w / 2;
     char shown[UI_PHRASE_LEN + 4];
     if (page == 0) {
-      if (morseOn()) {
+      if (gpsItem()) {
         drawCell(display, 2, 15, half - 4, ru() ? "клавиши" : "keys", _sel == 0, true);
-        drawCell(display, half + 2, 15, half - 4, ru() ? "морзе" : "morse", _sel == 1, true);
+        drawCell(display, half + 2, 15, half - 4, ru() ? "моё место" : "location", _sel == 1, true);
       } else {
         drawCell(display, 2, 15, w - 4, ru() ? "клавиатура" : "keyboard", _sel == 0, true);
       }
@@ -844,233 +843,6 @@ private:
     }
   }
 
-  // ------------------------------------------------------------ Morse
-  // The button is read directly: a press shorter than the dash time is a dot,
-  // longer is a dash. A pause of 2 dash times ends the letter, 5 dash times
-  // puts a space. The alphabet follows the language (ru / en).
-  bool _m_down = false;
-  bool _m_hold_exit = false;     // the press that left Morse is still down
-  unsigned long _m_edge = 0;     // when the button last went down or up
-  char _m_code[MORSE_MAX_LEN + 2];
-  int _m_n = 0;
-  bool _m_gap_done = true;       // the word pause already put its space
-  char _m_note[48];              // a short note under the code: what happened
-  bool _m_note_warn = false;
-  unsigned long _m_note_until = 0;
-  unsigned long _m_since = 0;    // when Morse was opened, for the rotating hints
-
-  unsigned long dashMs() const { return _task->morseDashMs(); }
-  unsigned long letterGapMs() const { return dashMs() * 2; }
-  unsigned long wordGapMs() const { return dashMs() * 5; }
-  unsigned long exitHoldMs() const { unsigned long t = dashMs() * 5; return t < 2000 ? 2000 : t; }
-
-  const MorseSym* morseTable(int& n) const {
-    if (ru()) { n = sizeof(MORSE_RU) / sizeof(MORSE_RU[0]); return MORSE_RU; }
-    n = sizeof(MORSE_EN) / sizeof(MORSE_EN[0]);
-    return MORSE_EN;
-  }
-
-  const char* morseLookup(const char* code) const {
-    int n;
-    const MorseSym* t = morseTable(n);
-    for (int i = 0; i < n; i++) if (strcmp(t[i].code, code) == 0) return t[i].out;
-    return NULL;
-  }
-
-  void morseNote(const char* text, bool warn) {
-    StrHelper::strncpy(_m_note, text, sizeof(_m_note));
-    _m_note_warn = warn;
-    _m_note_until = millis() + (warn ? 3000 : 1200);
-  }
-
-  void appendText(const char* s) {
-    char out[8];
-    shownKey(s, out);   // a capital when one is due
-    int l = strlen(out);
-    if (_len + l > COMPOSE_MAX_TEXT) { morseNote("too long", true); return; }
-    memcpy(&_text[_len], out, l + 1);
-    _len += l;
-  }
-
-  void eraseLetter() {
-    while (_len > 0 && ((uint8_t)_text[_len - 1] & 0xC0) == 0x80) _len--;
-    if (_len > 0) _len--;
-    _text[_len] = 0;
-  }
-
-  void addSpace() {
-    if (_len > 0 && _len < COMPOSE_MAX_TEXT && _text[_len - 1] != ' ') { _text[_len++] = ' '; _text[_len] = 0; }
-  }
-
-  bool allDots(const char* code) const {
-    for (; *code; code++) if (*code != '.') return false;
-    return true;
-  }
-
-  // the pattern is complete: a letter, a service signal or nothing known
-  void morseCommit() {
-    if (_m_n == 0) return;
-    _m_code[_m_n] = 0;
-    char note[48];
-    if (strcmp(_m_code, MORSE_SEND) == 0) {
-      _m_n = 0;
-      while (_len > 0 && _text[_len - 1] == ' ') _text[--_len] = 0;
-      if (_len > 0) send();
-      else morseNote(ru() ? "пусто: нечего слать" : "empty: nothing to send", true);
-      return;
-    }
-    if (strcmp(_m_code, MORSE_SPACE) == 0) {
-      addSpace();
-      morseNote(ru() ? "пробел" : "space", false);
-    } else if (_m_n >= MORSE_DEL_MIN && allDots(_m_code)) {
-      eraseLetter();
-      morseNote(ru() ? "стёрто" : "erased", false);
-    } else {
-      const char* out = _m_n <= MORSE_MAX_LEN ? morseLookup(_m_code) : NULL;
-      if (out) {
-        appendText(out);
-        snprintf(note, sizeof(note), "%s = %s", _m_code, out);
-        morseNote(note, false);
-      } else {
-        // not a letter: nothing is typed; say so and show what was received
-        snprintf(note, sizeof(note), "%s ?", _m_code);
-        morseNote(note, true);
-        _task->notify(UIEventType::none);
-      }
-    }
-    _m_n = 0;
-    _m_gap_done = false;
-  }
-
-  void enterMorse() {
-    _sym = false;
-    startTyping();
-    _mode = MORSE;
-    _m_n = 0;
-    _m_down = _task->isButtonPressed();
-    _m_hold_exit = _m_down;   // the hold that opened Morse must be let go first
-    _m_edge = millis();
-    _m_gap_done = true;
-    _m_note[0] = 0;
-    _m_note_until = 0;
-    _m_since = millis();
-  }
-
-  void leaveMorse() {
-    _m_n = 0;
-    _mode = PHRASE;
-    _sel = 1;
-    _task->showAlert(ru() ? "Морзе: выход" : "Morse: exit", 800);
-  }
-
-  // dot/dash marks in a row; the one being pressed grows from a dot to a dash
-  int drawPattern(DisplayDriver& display, int x, int y, const char* code, int n, int live) {
-    display.setColor(UIColor::primary_txt);
-    for (int i = 0; i < n; i++) {
-      int w = code[i] == '-' ? 12 : 4;
-      display.fillRect(x, y, w, 4);
-      x += w + 4;
-    }
-    if (live >= 0) {   // 0 = still a dot, 1 = already a dash
-      int w = live ? 12 : 4;
-      display.drawRect(x, y, w, 4);
-      x += w + 4;
-    }
-    return x;
-  }
-
-  void drawMorse(DisplayDriver& display) {
-    drawTextLine(display);
-    int w = display.width();
-    unsigned long now = millis();
-    bool pressing = _m_down && !_m_hold_exit;
-    int live = pressing ? ((now - _m_edge) >= dashMs() ? 1 : 0) : -1;
-
-    // row 1: what is being keyed and what it means so far
-    int x = drawPattern(display, 2, 17, _m_code, _m_n, live);
-    char cur[MORSE_MAX_LEN + 2];
-    memcpy(cur, _m_code, _m_n);
-    int cn = _m_n;
-    if (live >= 0 && cn < MORSE_MAX_LEN) cur[cn++] = live ? '-' : '.';
-    cur[cn] = 0;
-    char line[48];
-    if (cn > 0) {
-      const char* now_is = NULL;
-      if (strcmp(cur, MORSE_SEND) == 0) now_is = ru() ? "отпр." : "send";
-      else if (strcmp(cur, MORSE_SPACE) == 0) now_is = ru() ? "пробел" : "space";
-      else if (cn >= MORSE_DEL_MIN && allDots(cur)) now_is = ru() ? "стереть" : "erase";
-      else now_is = morseLookup(cur);
-      snprintf(line, sizeof(line), "= %s", now_is ? now_is : "?");
-      display.setColor(now_is ? UIColor::primary_txt : UIColor::warning_txt);
-      int tw = display.getTextWidth(line);
-      if (x < w - tw - 2) {
-        display.setCursor(w - tw - 1, 15);
-        display.print(line);
-      }
-    } else {
-      display.setColor(UIColor::secondary_txt);
-      snprintf(line, sizeof(line), ru() ? "точка < %lu мс < тире" : "dot < %lums < dash", dashMs());
-      display.drawTextCentered(w / 2, 15, line);
-    }
-
-    // row 2: what one more dot or dash would give
-    display.setColor(UIColor::secondary_txt);
-    if (cn > 0 && cn < MORSE_MAX_LEN) {
-      char nd[MORSE_MAX_LEN + 2], nh[MORSE_MAX_LEN + 2];
-      memcpy(nd, cur, cn); nd[cn] = '.'; nd[cn + 1] = 0;
-      memcpy(nh, cur, cn); nh[cn] = '-'; nh[cn + 1] = 0;
-      const char* a = morseLookup(nd);
-      const char* b = morseLookup(nh);
-      if (strcmp(nh, MORSE_SEND) == 0) b = ru() ? "отпр." : "send";
-      if (strcmp(nd, MORSE_SEND) == 0) a = ru() ? "отпр." : "send";
-      snprintf(line, sizeof(line), "+. %s   +- %s", a ? a : "-", b ? b : "-");
-      char shown[48];
-      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      display.drawTextCentered(w / 2, 27, shown);
-    } else if (cn == 0) {
-      unsigned long secs = (exitHoldMs() + 999) / 1000;
-      snprintf(line, sizeof(line), ru() ? "держать %lu с: выход" : "hold %lus: exit", secs);
-      display.drawTextCentered(w / 2, 27, line);
-    }
-
-    // row 3: what just happened, or a crib of the alphabet
-    if (_m_note[0] && (long)(now - _m_note_until) < 0) {
-      display.setColor(_m_note_warn ? UIColor::warning_txt : UIColor::primary_txt);
-      char shown[64];
-      if (_m_note_warn && _m_note[0] && strchr(_m_note, '?')) {
-        snprintf(line, sizeof(line), "%s %s", _m_note, ru() ? "нет знака" : "no sign");
-        display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      } else {
-        display.translateUTF8ToBlocks(shown, _m_note, sizeof(shown));
-      }
-      display.drawTextCentered(w / 2, 39, shown);
-    } else {
-      int n;
-      const MorseSym* t = morseTable(n);
-      int groups = (n + 2) / 3;
-      int g = ((now - _m_since) / 2500) % groups;
-      line[0] = 0;
-      for (int i = g * 3; i < g * 3 + 3 && i < n; i++) {
-        char part[16];
-        snprintf(part, sizeof(part), "%s%s%s", line[0] ? " " : "", t[i].out, t[i].code);
-        strncat(line, part, sizeof(line) - strlen(line) - 1);
-      }
-      char shown[48];
-      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      display.setColor(UIColor::secondary_txt);
-      display.drawTextCentered(w / 2, 39, shown);
-    }
-
-    // row 4: the service signals, in turn
-    static const char* const ru_tips[] = { ".-.-. отправить", "-...- пробел", "........ стереть", "пауза: пробел" };
-    static const char* const en_tips[] = { ".-.-. send", "-...- space", "........ erase", "long pause: space" };
-    const char* const* tips = ru() ? ru_tips : en_tips;
-    char shown[40];
-    display.translateUTF8ToBlocks(shown, tips[((now - _m_since) / 3000) % 4], sizeof(shown));
-    display.setColor(UIColor::corp_blue);
-    display.drawTextCentered(w / 2, 52, shown);
-  }
-
   bool canRetry() const {
     return _sent == 0 || ((_sent == 1 || _sent == 2) && the_mesh.uiAckState() == MyMesh::UI_ACK_LOST);
   }
@@ -1097,7 +869,7 @@ private:
     display.drawTextCentered(display.width() / 2, 53, "press: back");
   }
 
-  // one letter or sign from the keyboard or Morse, a capital when one is due
+  // one letter or sign from the keyboard, a capital when one is due
   void typeLetter(const char* key) {
     char out[8];
     shownKey(key, out);
@@ -1145,47 +917,7 @@ private:
   }
 
 public:
-  ComposeScreen(UITask* task) : _task(task) { _text[0] = 0; _re[0] = 0; _m_code[0] = 0; _m_note[0] = 0; }
-
-  bool morseActive() const { return _mode == MORSE; }
-
-  // called on every loop while Morse is open, with the raw button state
-  void morseButton(bool down) {
-    unsigned long now = millis();
-    if (_m_hold_exit) {             // wait for the hold that opened or closed Morse to end
-      if (!down) { _m_hold_exit = false; _m_down = false; _m_edge = now; }
-      return;
-    }
-    if (down != _m_down) {
-      if (!down) {                  // released: the length of the press decides
-        unsigned long held = now - _m_edge;
-        if (held >= 20) {           // shorter is contact bounce
-          if (_m_n < MORSE_MAX_LEN + 1) _m_code[_m_n++] = held >= dashMs() ? '-' : '.';
-        }
-      }
-      _m_down = down;
-      _m_edge = now;
-      _task->keepDisplayAwake();
-      _task->requestRefresh();
-      return;
-    }
-    if (down) {
-      if (now - _m_edge >= exitHoldMs()) {   // a very long hold leaves Morse, the text stays
-        _m_hold_exit = true;
-        leaveMorse();
-      }
-      return;
-    }
-    unsigned long gap = now - _m_edge;
-    if (_m_n > 0 && gap >= letterGapMs()) {
-      morseCommit();
-      _task->requestRefresh();
-    } else if (_m_n == 0 && !_m_gap_done && gap >= wordGapMs()) {
-      addSpace();
-      _m_gap_done = true;
-      _task->requestRefresh();
-    }
-  }
+  ComposeScreen(UITask* task) : _task(task) { _text[0] = 0; _re[0] = 0; }
 
   void enter() {
     loadTargets();
@@ -1244,10 +976,6 @@ public:
       case PICK:   drawPick(display); return 5000;
       case PHRASE: drawPhrases(display); return 5000;
       case KEYS:   drawKeys(display); return 5000;
-      case MORSE:
-        drawMorse(display);
-        if (millis() - _m_edge < 60000) _task->keepDisplayAwake();   // idle a minute: the screen may sleep
-        return 40;
       default: break;
     }
     drawResult(display);
@@ -1287,7 +1015,6 @@ public:
       }
       return true;
     }
-    if (_mode == MORSE) return true;   // Morse reads the button itself
     if (_mode == PHRASE) {
       int items = numPhrases() + firstPhrase();
       if (_sel >= items) _sel = 0;
@@ -1311,8 +1038,17 @@ public:
           _row = 1;   // middle letter row
           _col = 0;
           _keys_hint_until = millis() + 2500;   // the button legend first
-        } else if (isMorseItem(_sel)) {
-          enterMorse();
+        } else if (gpsItem() && _sel == 1) {   // my position as geo:lat,lon
+          char pos[48];
+          if (!the_mesh.uiMyPosition(pos, sizeof(pos))) {
+            _task->showAlert(ru() ? "Нет GPS-фикса" : "No GPS fix", 1200);
+          } else {
+            saveDraft();
+            _typed = false;
+            StrHelper::strncpy(_text, pos, sizeof(_text));
+            _len = strlen(_text);
+            send();
+          }
         } else {
           saveDraft();   // a phrase does not replace what was typed
           _typed = false;

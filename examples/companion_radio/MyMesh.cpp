@@ -303,6 +303,17 @@ int MyMesh::uiSendDirect(const uint8_t* pub_prefix, const char* text) {
   return result == MSG_SEND_SENT_FLOOD ? 2 : 1;
 }
 
+bool MyMesh::uiMyPosition(char* buf, size_t n) {
+#if ENV_INCLUDE_GPS == 1
+  if (!_prefs.gps_enabled || !beaconHasFix()) return false;
+  snprintf(buf, n, "geo:%.5f,%.5f", sensors.node_lat, sensors.node_lon);
+  return true;
+#else
+  (void)buf; (void)n;
+  return false;
+#endif
+}
+
 const char* MyMesh::uiPhrase(int i) const {
   if (i < 0 || i >= UI_PHRASE_COUNT) return "";
   if (_phrase_ovr[i][0]) return _phrase_ovr[i];
@@ -2550,7 +2561,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set morse on|off, set morse.dash MS, set kb std|freq, set caps on|off, set cursor on|off, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set kb std|freq, set caps on|off, set cursor on|off, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -2651,35 +2662,6 @@ void MyMesh::runCLICommand(char* command, Print& out) {
           return;
         }
         snprintf(line, sizeof(line), "  > caps is %s\n", _prefs.auto_caps ? "on" : "off");
-      }
-      out.print(line);
-    } else if (memcmp(command, "set morse", 9) == 0 && (command[9] == 0 || command[9] == ' ' || command[9] == '.')) {
-      // set morse on|off, set morse.dash 100..1000 (ms: shorter is a dot)
-      if (memcmp(&command[9], ".dash", 5) == 0) {
-        const char* arg = &command[14];
-        while (*arg == ' ') arg++;
-        int ms = atoi(arg);
-        if (*arg == 0) {
-          snprintf(line, sizeof(line), "  > morse.dash is %u ms\n", (unsigned)_prefs.morse_dash_ms);
-        } else if (ms < 100 || ms > 1000) {
-          snprintf(line, sizeof(line), "  Error: morse.dash is 100..1000 ms\n");
-        } else {
-          _prefs.morse_dash_ms = (uint16_t)ms;
-          savePrefs();
-          snprintf(line, sizeof(line), "  > morse.dash is now %d ms\n", ms);
-        }
-      } else {
-        const char* arg = &command[9];
-        while (*arg == ' ') arg++;
-        if (*arg == 0) {
-          snprintf(line, sizeof(line), "  > morse is %s\n", _prefs.morse_input ? "on" : "off");
-        } else if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
-          _prefs.morse_input = strcmp(arg, "on") == 0 ? 1 : 0;
-          savePrefs();
-          snprintf(line, sizeof(line), "  > morse is now %s\n", arg);
-        } else {
-          snprintf(line, sizeof(line), "  Error: set morse on|off\n");
-        }
       }
       out.print(line);
     } else if (memcmp(command, "set ", 4) == 0 && memcmp(&command[4], "phrase", 6) == 0 &&

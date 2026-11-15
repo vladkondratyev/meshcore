@@ -131,6 +131,8 @@ public:
   const char* uiPhrase(int i) const;
   bool uiPhraseCustom(int i) const { return i >= 0 && i < UI_PHRASE_COUNT && _phrase_ovr[i][0] != 0; }
   void setUiPhrase(int i, const char* text);
+  // own position as "geo:lat,lon" for the Write page; false without a GPS fix
+  bool uiMyPosition(char* buf, size_t n);
   uint32_t uiLastAck() const { return _ui_ack; }
   unsigned long uiLastAckUntil() const { return _ui_ack_until; }
   // sender of the message last passed to the UI, so the device can reply to it

@@ -249,8 +249,8 @@ class HomeScreen : public UIScreen {
   uint8_t _msg_row = 0;      // Msg scroll page: the setting under the cursor
   bool _msg_edit = false;    // Msg scroll page: changing settings
 
-  // Msg scroll page: running line, Morse entry and the dash time in one place
-  #define MSG_SET_ROWS 6
+  // Msg scroll page: running line and keyboard settings in one place
+  #define MSG_SET_ROWS 4
   #define MSG_SET_SHOWN 3
   void changeMsgSetting() {
     if (!_node_prefs) return;
@@ -259,19 +259,11 @@ class HomeScreen : public UIScreen {
       return;
     }
     if (_msg_row == 1) {
-      _node_prefs->morse_input = _node_prefs->morse_input ? 0 : 1;
-    } else if (_msg_row == 3) {
       _node_prefs->kb_layout = _node_prefs->kb_layout ? 0 : 1;
-    } else if (_msg_row == 4) {
+    } else if (_msg_row == 2) {
       _node_prefs->auto_caps = _node_prefs->auto_caps ? 0 : 1;
-    } else if (_msg_row == 5) {
-      _node_prefs->auto_cursor = _node_prefs->auto_cursor ? 0 : 1;
     } else {
-      static const uint16_t steps[] = { 200, 250, 300, 350, 400, 500, 600, 800 };
-      const int n = sizeof(steps) / sizeof(steps[0]);
-      int i = 0;
-      while (i < n && steps[i] <= _node_prefs->morse_dash_ms) i++;
-      _node_prefs->morse_dash_ms = steps[i % n];
+      _node_prefs->auto_cursor = _node_prefs->auto_cursor ? 0 : 1;
     }
     the_mesh.savePrefs();
     _task->notify(UIEventType::ack);
@@ -1168,16 +1160,12 @@ public:
       }
 #ifdef UI_MSG_TICKER
     } else if (_page == HomePage::TICKER) {
-      // three settings of incoming and outgoing messages; hold to change them
-      bool morse = _task->morseEnabled();
-      char dash[16];
-      snprintf(dash, sizeof(dash), "%lums", _task->morseDashMs());
+      // settings of incoming and outgoing messages; hold to change them
       bool ru = _task->langRu();
       const char* layout = _task->kbFreqLayout() ? (ru ? "частотн." : "freq") : (ru ? "ЙЦУКЕН" : "QWERTY");
-      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Morse input", "Morse dash", "Keys layout", "Auto caps",
-                                           "Auto cursor" };
-      const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", morse ? "ON" : "OFF", dash,
-                                           layout, _task->autoCaps() ? "ON" : "OFF",
+      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Keys layout", "Auto caps", "Auto cursor" };
+      const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", layout,
+                                           _task->autoCaps() ? "ON" : "OFF",
                                            _task->autoCursor() ? "ON" : "OFF" };
       display.setTextSize(1);
       // three rows on screen; the window follows the cursor
@@ -1185,7 +1173,7 @@ public:
       if (_msg_edit && _msg_row >= MSG_SET_SHOWN) top = _msg_row - MSG_SET_SHOWN + 1;
       for (int i = top; i < top + MSG_SET_SHOWN && i < MSG_SET_ROWS; i++) {
         int y = 20 + (i - top) * 11;
-        bool off = strcmp(rows_r[i], "OFF") == 0 || (i == 2 && !morse);
+        bool off = strcmp(rows_r[i], "OFF") == 0;
         display.setColor(UIColor::primary_txt);
         if (_msg_edit && (uint8_t)i == _msg_row) {
           display.fillRect(0, y - 1, display.width(), 10);
@@ -1196,7 +1184,7 @@ public:
         display.drawTextLeftAlign(2, y, rows_l[i]);
         display.drawTextRightAlign(display.width() - 3, y, rows_r[i]);
       }
-      // scroll bar on the right edge: where the three rows are among all five
+      // scroll bar on the right edge: where the three rows are among all of them
       display.setColor(UIColor::secondary_txt);
       int bar_h = 32 * MSG_SET_SHOWN / MSG_SET_ROWS;
       display.fillRect(display.width() - 1, 19 + 32 * top / MSG_SET_ROWS, 1, bar_h);
@@ -2342,11 +2330,6 @@ void UITask::loop() {
     user_btn.setLongMillis(inCompose() && base_long > 0 ? COMPOSE_HOLD_MILLIS : base_long);
   }
   int ev = user_btn.check();
-  if (inCompose() && ((ComposeScreen*)compose)->morseActive() && _display != NULL && _display->isOn()) {
-    // Morse reads press lengths itself; clicks and holds mean nothing here
-    ((ComposeScreen*)compose)->morseButton(user_btn.isPressed());
-    ev = BUTTON_EVENT_NONE;
-  }
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
