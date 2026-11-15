@@ -62,6 +62,7 @@
 #include "icons.h"
 #include "ComposeScreen.h"
 #include "SentScreen.h"
+#include "RelayScreen.h"
 
 #ifdef BOOK_READER
   #include "ReaderScreen.h"
@@ -217,6 +218,9 @@ class HomeScreen : public UIScreen {
 #endif
     WRITE,   // write a message on the device
     SENT,    // what the device sent: to whom, in reply to what, delivered or not
+#ifdef RELAY_SUPPORT
+    RELAYS,  // smart switches: on / off from here
+#endif
     RECENT,
     NEIGHBORS,
     RADIO,
@@ -723,6 +727,24 @@ public:
         display.drawTextCentered(display.width() / 2, 34, "from this device");
       }
       display.drawTextCentered(display.width() / 2, 64 - 11, "open: " PRESS_LABEL);
+#ifdef RELAY_SUPPORT
+    } else if (_page == HomePage::RELAYS) {
+      char line[32];
+      int n = the_mesh.relays.count(), on = 0;
+      for (int i = 0; i < RELAY_MAX; i++) {
+        RelayDef* r = the_mesh.relays.get(i);
+        if (r && r->state == RELAY_ON) on++;
+      }
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(1);
+      snprintf(line, sizeof(line), "Relays: %d", n);
+      display.drawTextCentered(display.width() / 2, 22, line);
+      display.setColor(UIColor::secondary_txt);
+      if (n > 0) snprintf(line, sizeof(line), "on: %d", on);
+      else snprintf(line, sizeof(line), "none set up");
+      display.drawTextCentered(display.width() / 2, 34, line);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "open: " PRESS_LABEL);
+#endif
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       int shown = 0;
@@ -1415,6 +1437,12 @@ public:
       _task->openSent();
       return true;
     }
+#ifdef RELAY_SUPPORT
+    if (c == KEY_ENTER && _page == HomePage::RELAYS) {
+      _task->openRelays();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -2094,6 +2122,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
   compose = display != NULL ? new ComposeScreen(this) : NULL;
   sent = display != NULL ? new SentScreen(this) : NULL;
+  relays = display != NULL ? new RelayScreen(this) : NULL;
   _idle_since = millis();
   syncDisplayRefresh();
   setCurrScreen(splash);
@@ -2114,6 +2143,12 @@ bool UITask::openReply(const ComposeTarget& to, const char* re) {
 
 bool UITask::openWriteTo(const ComposeTarget& to) {
   return openReply(to, NULL);
+}
+
+void UITask::openRelays() {
+  if (!relays) return;
+  ((RelayScreen*)relays)->enter();
+  setCurrScreen(relays);
 }
 
 void UITask::openSent() {
@@ -2206,7 +2241,7 @@ void UITask::msgRead(int msgcount) {
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
   // an open message window stays open: only button presses read it
-  if (msgcount == 0 && curr != clock && curr != msg_preview && !inReader() && !inCompose() && !inSent()) {
+  if (msgcount == 0 && curr != clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -2217,7 +2252,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text, group);
-  if (curr == clock || inReader() || inCompose() || inSent()) {   // reader, writer and Sent only show an envelope
+  if (curr == clock || inReader() || inCompose() || inSent() || inRelays()) {   // reader, writer and Sent only show an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
@@ -2496,7 +2531,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays()) return c;
   return 0;
 }
 
@@ -2504,7 +2539,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays()) return c;
   toggleBuzzer();
   return 0;
 }

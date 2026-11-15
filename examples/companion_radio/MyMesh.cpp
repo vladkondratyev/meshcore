@@ -745,6 +745,103 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t 
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
+  relayText(from, text);   // "реле 1 вкл" from an allowed contact switches a relay
+}
+
+// ------------------------------------------------------------ relays
+
+void MyMesh::relayReply(const uint8_t* key, const char* text) {
+  ContactInfo* c = lookupContactByPubKey(key, 6);
+  if (c == NULL || c->type != ADV_TYPE_CHAT) return;
+  uint32_t ack = 0, est = 0;
+  sendMessage(*c, getRTCClock()->getCurrentTimeUnique(), 0, text, ack, est);
+}
+
+void MyMesh::relayStatus(int i, char* buf, size_t n) {
+  RelayDef* r = relays.get(i);
+  bool ru = _prefs.ui_lang != UI_LANG_EN;
+  if (r == NULL) { snprintf(buf, n, ru ? "реле %d: нет" : "relay %d: none", i + 1); return; }
+  const char* st = r->state == RELAY_ON ? (ru ? "ВКЛ" : "ON") : r->state == RELAY_OFF ? (ru ? "ВЫКЛ" : "OFF") : "?";
+  snprintf(buf, n, "%s %d %s: %s", ru ? "реле" : "relay", i + 1, r->name, st);
+}
+
+// lower-case Latin and Cyrillic letters in place (UTF-8)
+static void relayLower(char* s) {
+  for (uint8_t* p = (uint8_t*)s; *p; p++) {
+    if (*p >= 'A' && *p <= 'Z') *p += 0x20;
+    else if (p[0] == 0xD0 && p[1] >= 0x90 && p[1] <= 0x9F) { p[1] += 0x20; p++; }            // А..П
+    else if (p[0] == 0xD0 && p[1] >= 0xA0 && p[1] <= 0xAF) { p[0] = 0xD1; p[1] -= 0x20; p++; } // Р..Я
+    else if (p[0] == 0xD0 && p[1] == 0x81) { p[0] = 0xD1; p[1] = 0x91; p++; }                  // Ё
+    else if (*p >= 0xC0 && p[1]) p++;
+  }
+}
+
+bool MyMesh::relayText(const ContactInfo& from, const char* text) {
+  if (!relays.supported() || !relays.meshOn() || !relays.allowed(from.id.pub_key)) return false;
+  char t[64];
+  strncpy(t, text, sizeof(t) - 1);
+  t[sizeof(t) - 1] = 0;
+  relayLower(t);
+  const char* p = t;
+  if (strncmp(p, "реле", 8) == 0) p += 8;
+  else if (strncmp(p, "relay", 5) == 0) p += 5;
+  else return false;
+  if (*p != 0 && *p != ' ') return false;
+  while (*p == ' ') p++;
+  bool ru = _prefs.ui_lang != UI_LANG_EN;
+  char reply[120];
+  if (*p == 0) {   // "реле": all of them
+    reply[0] = 0;
+    for (int i = 0; i < RELAY_MAX; i++) {
+      if (!relays.get(i)) continue;
+      char one[40];
+      relayStatus(i, one, sizeof(one));
+      if (strlen(reply) + strlen(one) + 3 < sizeof(reply)) {
+        if (reply[0]) strcat(reply, "; ");
+        strcat(reply, one);
+      }
+    }
+    if (!reply[0]) strcpy(reply, ru ? "реле не настроены" : "no relays");
+    relayReply(from.id.pub_key, reply);
+    return true;
+  }
+  // which relay: a number or a name
+  char who[RELAY_NAME_LEN + 4];
+  int n = 0;
+  while (*p && *p != ' ' && n < (int)sizeof(who) - 1) who[n++] = *p++;
+  who[n] = 0;
+  while (*p == ' ') p++;
+  int idx = -1;
+  if (who[0] >= '1' && who[0] <= '9' && who[1] == 0) idx = who[0] - '1';
+  else {
+    for (int i = 0; i < RELAY_MAX && idx < 0; i++) {
+      RelayDef* r = relays.get(i);
+      if (!r) continue;
+      char nm[RELAY_NAME_LEN];
+      strcpy(nm, r->name);
+      relayLower(nm);
+      if (strcmp(nm, who) == 0) idx = i;
+    }
+  }
+  if (!relays.get(idx)) {
+    relayReply(from.id.pub_key, ru ? "нет такого реле" : "no such relay");
+    return true;
+  }
+  int action = -1;
+  if (strcmp(p, "вкл") == 0 || strcmp(p, "on") == 0 || strcmp(p, "1") == 0) action = RELAY_DO_ON;
+  else if (strcmp(p, "выкл") == 0 || strcmp(p, "off") == 0 || strcmp(p, "0") == 0) action = RELAY_DO_OFF;
+  else if (strcmp(p, "перекл") == 0 || strcmp(p, "toggle") == 0) action = RELAY_DO_TOGGLE;
+  if (action < 0) {   // "?", "статус" or nothing: the state
+    relayStatus(idx, reply, sizeof(reply));
+    relayReply(from.id.pub_key, reply);
+    return true;
+  }
+  if (!relays.request(idx, (uint8_t)action, from.id.pub_key)) {
+    snprintf(reply, sizeof(reply), ru ? "реле %d: занято (%s)" : "relay %d: busy (%s)", idx + 1,
+             relays.lastError()[0] ? relays.lastError() : "...");
+    relayReply(from.id.pub_key, reply);
+  }
+  return true;
 }
 
 void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
@@ -1202,6 +1299,7 @@ void MyMesh::begin(bool has_display) {
   // load persisted prefs
   _store->loadPrefs(_prefs);
   memset(_phrase_ovr, 0, sizeof(_phrase_ovr));
+  relays.begin(_store);
   if (_store->loadRaw("/phrases", _phrase_ovr, sizeof(_phrase_ovr))) {
     for (int i = 0; i < UI_PHRASE_COUNT; i++) _phrase_ovr[i][UI_PHRASE_LEN - 1] = 0;
   } else {
@@ -2561,7 +2659,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set kb std|freq, set caps on|off, set cursor on|off, ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set kb std|freq, set caps on|off, set cursor on|off, relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -2623,6 +2721,132 @@ void MyMesh::runCLICommand(char* command, Print& out) {
       for (int i = from; i < to; i++) {
         snprintf(line, sizeof(line), "%d%s %s\n", i + 1, uiPhraseCustom(i) ? "*" : "", uiPhrase(i));
         out.print(line);
+      }
+    } else if (memcmp(command, "relays", 6) == 0 && (command[6] == 0 || command[6] == ' ')) {
+      // relays [2]: four at a time, a console reply is short
+      int from = atoi(&command[6]) == 2 ? 4 : 0;
+      if (!relays.supported()) {
+        out.print("  relays need an ESP32 _ble or _wifi build\n");
+      } else {
+        int shown = 0;
+        for (int i = from; i < from + 4 && i < RELAY_MAX; i++) {
+          RelayDef* r = relays.get(i);
+          if (!r) continue;
+          const char* st = r->state == RELAY_ON ? "ON" : r->state == RELAY_OFF ? "OFF" : "?";
+          if (r->kind == RELAY_LCTECH) {
+            char mac[20];
+            RelayManager::formatMac(r->mac, mac);
+            snprintf(line, sizeof(line), "%d %s %s ch%d %s %s\n", i + 1, r->name, RelayManager::kindName(r->kind), r->ch, mac, st);
+          } else {
+            snprintf(line, sizeof(line), "%d %s %s ch%d %s %s\n", i + 1, r->name, RelayManager::kindName(r->kind), r->ch, r->host, st);
+          }
+          out.print(line);
+          shown++;
+        }
+        if (!shown) out.print(from ? "  no relays 5-8\n" : "  no relays 1-4 (relays 2: 5-8)\n");
+        snprintf(line, sizeof(line), "mesh %s\n", relays.meshOn() ? "on" : "off");
+        out.print(line);
+      }
+    } else if (memcmp(command, "relay ", 6) == 0) {
+      // relay add|del|scan|found|mesh|allow|deny|N on|off|toggle
+      char* arg = &command[6];
+      while (*arg == ' ') arg++;
+      char* rest = arg;
+      while (*rest && *rest != ' ') rest++;
+      if (*rest) *rest++ = 0;
+      while (*rest == ' ') rest++;
+      if (!relays.supported()) {
+        out.print("  relays need an ESP32 _ble or _wifi build\n");
+      } else if (strcmp(arg, "scan") == 0) {
+        out.print(relays.startScan() ? "  scanning 5 s, then: relay found\n" : "  Error: busy or no bluetooth\n");
+      } else if (strcmp(arg, "found") == 0) {
+        if (relays.scanning()) out.print("  still scanning...\n");
+        else if (relays.foundCount() == 0) out.print("  nothing found (relay scan)\n");
+        for (int k = 0; k < relays.foundCount() && k < 5; k++) {
+          const RelayFound* f = relays.found(k);
+          char mac[20];
+          RelayManager::formatMac(f->mac, mac);
+          snprintf(line, sizeof(line), "%d %s %s %ddBm\n", k + 1, f->name, mac, f->rssi);
+          out.print(line);
+        }
+      } else if (strcmp(arg, "add") == 0) {
+        // relay add N kind address [ch] [name]; kind found: address = number from `relay found`
+        char* tok[5] = {0};
+        int nt = 0;
+        char* q = rest;
+        while (*q && nt < 5) {
+          tok[nt++] = q;
+          if (nt == 5) break;   // the name keeps its spaces
+          while (*q && *q != ' ') q++;
+          if (*q) *q++ = 0;
+          while (*q == ' ') q++;
+        }
+        int slot = nt > 0 ? atoi(tok[0]) - 1 : -1;
+        uint8_t kind = RELAY_NONE;
+        bool from_found = nt > 1 && strcmp(tok[1], "found") == 0;
+        if (nt < 3 || slot < 0 || slot >= RELAY_MAX || (!from_found && !RelayManager::parseKind(tok[1], kind))) {
+          out.print("  Error: relay add N lctech|shelly|shelly1|tasmota|found ADDRESS [CH] [NAME]\n");
+        } else if (!from_found && !RelayManager::kindSupported(kind)) {
+          out.print(kind == RELAY_LCTECH ? "  Error: lctech needs a _ble build\n" : "  Error: wi-fi relays need a _wifi build\n");
+        } else {
+          RelayDef d;
+          memset(&d, 0, sizeof(d));
+          d.ch = nt > 3 ? (uint8_t)atoi(tok[3]) : 1;
+          if (d.ch == 0) d.ch = 1;
+          bool good = true;
+          if (from_found) {
+            const RelayFound* f = relays.found(atoi(tok[2]) - 1);
+            if (f) { d.kind = RELAY_LCTECH; memcpy(d.mac, f->mac, 6); }
+            else good = false;
+          } else {
+            d.kind = kind;
+            if (kind == RELAY_LCTECH) good = RelayManager::parseMac(tok[2], d.mac);
+            else StrHelper::strncpy(d.host, tok[2], sizeof(d.host));
+          }
+          if (nt > 4) StrHelper::strncpy(d.name, tok[4], sizeof(d.name));
+          else snprintf(d.name, sizeof(d.name), "relay %d", slot + 1);
+          if (!good) out.print("  Error: bad address (AA:BB:CC:DD:EE:FF or number from relay found)\n");
+          else if (!relays.set(slot, d)) out.print("  Error: busy, try again\n");
+          else { snprintf(line, sizeof(line), "  > relay %d: %s\n", slot + 1, d.name); out.print(line); }
+        }
+      } else if (strcmp(arg, "del") == 0) {
+        int slot = atoi(rest) - 1;
+        out.print(relays.remove(slot) ? "  > deleted\n" : "  Error: relay del N\n");
+      } else if (strcmp(arg, "mesh") == 0) {
+        if (strcmp(rest, "on") == 0 || strcmp(rest, "off") == 0) relays.setMeshOn(strcmp(rest, "on") == 0);
+        snprintf(line, sizeof(line), "  > mesh %s\n", relays.meshOn() ? "on" : "off");
+        out.print(line);
+      } else if (strcmp(arg, "allow") == 0 || strcmp(arg, "deny") == 0) {
+        bool allow = strcmp(arg, "allow") == 0;
+        if (*rest == 0) {   // the list
+          int n = 0;
+          for (int i = 0; i < RELAY_ALLOW_MAX; i++) {
+            const uint8_t* k = relays.allowedKey(i);
+            if (!k) continue;
+            ContactInfo* c = lookupContactByPubKey(k, 6);
+            snprintf(line, sizeof(line), "  %s\n", c ? c->name : "(unknown)");
+            out.print(line);
+            n++;
+          }
+          if (!n) out.print("  nobody: relay allow NAME\n");
+        } else {
+          ContactInfo* c = searchContactsByPrefix(rest);
+          if (!c) out.print("  Error: no such contact\n");
+          else if (allow && !relays.allow(c->id.pub_key)) out.print("  Error: 4 at most\n");
+          else {
+            if (!allow) relays.deny(c->id.pub_key);
+            snprintf(line, sizeof(line), "  > %s %s\n", allow ? "allowed" : "denied", c->name);
+            out.print(line);
+          }
+        }
+      } else if (arg[0] >= '1' && arg[0] <= '8' && arg[1] == 0) {
+        int i = arg[0] - '1';
+        uint8_t action = strcmp(rest, "on") == 0 ? RELAY_DO_ON : strcmp(rest, "off") == 0 ? RELAY_DO_OFF : RELAY_DO_TOGGLE;
+        if (!relays.get(i)) out.print("  Error: no such relay\n");
+        else if (relays.request(i, action)) out.print("  > switching...\n");
+        else { snprintf(line, sizeof(line), "  Error: %s\n", relays.lastError()[0] ? relays.lastError() : "busy"); out.print(line); }
+      } else {
+        out.print("  relay scan|found|add|del|mesh|allow|deny|N on|off\n");
       }
     } else if (memcmp(command, "set cursor", 10) == 0 && (command[10] == 0 || command[10] == ' ')) {
       // set cursor on|off: the keyboard cursor jumps to the likely next letter
@@ -3166,6 +3390,17 @@ bool MyMesh::pullClock() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+
+  {   // a relay switched (or failed): tell whoever asked by a mesh text
+    int idx; bool ok, scan, reply; uint8_t key[6];
+    if (relays.poll(idx, ok, scan, reply, key) && reply && !scan) {
+      char text[80];
+      if (ok) relayStatus(idx, text, sizeof(text));
+      else snprintf(text, sizeof(text), "%s %d: %s", _prefs.ui_lang != UI_LANG_EN ? "реле" : "relay", idx + 1,
+                    relays.lastError());
+      relayReply(key, text);
+    }
+  }
   serviceConsoleAck();
 
   if (_cli_rescue) {

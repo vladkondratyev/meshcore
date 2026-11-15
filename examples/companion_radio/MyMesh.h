@@ -24,6 +24,7 @@
 #include "DataStore.h"
 #include "NodePrefs.h"
 #include "UiPhrases.h"
+#include "Relays.h"
 
 #include <RTClib.h>
 #include <helpers/ArduinoHelpers.h>
@@ -133,6 +134,11 @@ public:
   void setUiPhrase(int i, const char* text);
   // own position as "geo:lat,lon" for the Write page; false without a GPS fix
   bool uiMyPosition(char* buf, size_t n);
+  // smart switches (Relays.h): the Relays page, `relay ...` commands, mesh texts
+  RelayManager relays;
+  void relayReply(const uint8_t* key, const char* text);   // a direct message back to a contact
+  bool relayText(const ContactInfo& from, const char* text);   // "реле 1 вкл" from an allowed contact
+  void relayStatus(int i, char* buf, size_t n);
   uint32_t uiLastAck() const { return _ui_ack; }
   unsigned long uiLastAckUntil() const { return _ui_ack_until; }
   // sender of the message last passed to the UI, so the device can reply to it

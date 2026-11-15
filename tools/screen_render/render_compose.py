@@ -21,7 +21,7 @@ from render_oled import Oled, BLACK, WHITE, ROOT, to_image, sheet  # noqa: E402
 ro.NODE_NAME = "MeshNode"
 
 # Home pages of a T114 / Heltec V3 / V4 companion with this fork.
-PAGES = ["FIRST", "WRITE", "SENT", "RECENT", "NEIGHBORS", "RADIO", "POWER", "SCAN", "FSCAN",
+PAGES = ["FIRST", "WRITE", "SENT", "RELAYS", "RECENT", "NEIGHBORS", "RADIO", "POWER", "SCAN", "FSCAN",
          "BLUETOOTH", "GPS", "BEACON", "TICKER", "SHUTDOWN"]
 
 TARGETS = ["#public", "#Squad North", "@Alexey", "@Base Camp", "@Fox"]
@@ -168,6 +168,50 @@ def scr_msg_settings(d, edit=False, row=0, scroll=True, freq=False, caps=True, l
     d.fillRect(w - 1, 19 + 32 * top // n, 1, 32 * 3 // n)
     d.drawTextCentered(w // 2, 64 - 11, "hold:change 3x:done" if edit else "settings: " + ro.PRESS_LABEL)
 
+
+def scr_relays_page(d, n=3, on=1):
+    ro.home_header(d, "RELAYS")
+    w = d.width()
+    d.setColor(WHITE); d.setTextSize(1)
+    d.drawTextCentered(w // 2, 22, "Relays: %d" % n)
+    d.drawTextCentered(w // 2, 34, "on: %d" % on if n else "none set up")
+    d.drawTextCentered(w // 2, 64 - 11, "open: " + ro.PRESS_LABEL)
+
+
+def scr_relays(d, lines, sel=0, count=3):
+    """lines: (left, right) pairs as RelayScreen draws them."""
+    w = d.width()
+    d.setTextSize(1); d.setColor(WHITE)
+    d.drawTextEllipsized(0, 0, w, d.translate("Реле: %d" % count, 30))
+    d.drawRect(0, 11, w, 1)
+    top = max(0, sel - 3)
+    for r, (left, right) in enumerate(lines[top:top + 4]):
+        i = top + r
+        y = 14 + r * 12
+        d.setColor(WHITE)
+        if i == sel:
+            d.fillRect(0, y - 1, w, 11); d.setColor(BLACK)
+        rs = d.translate(right, 12)
+        rw = d.getTextWidth(rs)
+        d.drawTextEllipsized(2, y, w - rw - 8, d.translate(left, 40))
+        if right:
+            d.setCursor(w - rw - 2, y); d.print(rs)
+        d.setColor(WHITE)
+
+
+RELAY_LIST = [("1 насос", "ВКЛ"), ("2 свет", "ВЫКЛ"), ("3 ворота", "?"), ("Найти реле", "")]
+
+RELAY_SCREENS = [
+    ("c1_relays_page", "Страница Relays в меню", lambda d: scr_relays_page(d)),
+    ("c2_relays_list", "Удержание — вкл/выкл", lambda d: scr_relays(d, RELAY_LIST, 0)),
+    ("c3_relays_busy", "Переключается…", lambda d: scr_relays(d, [("1 насос", "..."), ("2 свет", "ВЫКЛ"),
+                                                                  ("3 ворота", "?"), ("Найти реле", "")], 0)),
+    ("c4_relays_scan", "Поиск Bluetooth-реле рядом", lambda d: scr_relays(d, RELAY_LIST[:3] + [("Поиск...", "")], 3)),
+    ("c5_relays_found", "Найдено: удержание — добавить",
+     lambda d: scr_relays(d, RELAY_LIST + [("+ JDY-16", "-61"), ("+ LCTECH-4", "-74")], 4)),
+    ("c6_relays_mesh", "Написали «реле насос вкл» — ответ",
+     lambda d: ro.scr_message(d, "реле 1 насос: ВКЛ", unread=1, origin="(1) Дача:")),
+]
 
 SETTINGS_SCREENS = [
     ("90_msg_settings", "Настройки: удержание — открыть", lambda d: scr_msg_settings(d)),
@@ -663,7 +707,8 @@ def main():
     sheet(jitems, 3, "Без телефона: пришло — прочитал — ответил — доставлено").save(
         os.path.join(out, "gallery_autonomy.png"))
 
-    for name, title_, screens in (("settings", "Настройки сообщений", SETTINGS_SCREENS),
+    for name, title_, screens in (("relays", "Реле: умные выключатели", RELAY_SCREENS),
+                                  ("settings", "Настройки сообщений", SETTINGS_SCREENS),
                                   ("gps", "Моё место: координаты одной кнопкой", GPS_SCREENS)):
         items = []
         os.makedirs(os.path.join(out, name), exist_ok=True)

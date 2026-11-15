@@ -56,6 +56,7 @@ class UITask : public AbstractUITask {
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
   UIScreen* compose;   // Write page: message typed on the device
   UIScreen* sent;      // Sent page: what the device sent, to whom, in reply to what
+  UIScreen* relays;    // Relays page: smart switches
   SentLog _sent_log;
   UIScreen* curr;
   unsigned long _idle_since;
@@ -81,6 +82,7 @@ public:
     reader = NULL;
     compose = NULL;
     sent = NULL;
+    relays = NULL;
     _idle_since = 0;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
@@ -93,6 +95,8 @@ public:
   bool openWriteTo(const ComposeTarget& to);
   void openSent();
   bool inSent() const { return curr != NULL && curr == sent; }
+  void openRelays();
+  bool inRelays() const { return curr != NULL && curr == relays; }
   SentLog& sentLog() { return _sent_log; }
   int  getUnreadCount() const;
   bool inCompose() const { return curr != NULL && curr == compose; }
