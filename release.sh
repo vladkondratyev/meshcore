@@ -49,7 +49,7 @@ done
 # every file must carry this version and commit
 for f in "$OUT"/*.bin "$OUT"/*.uf2; do
   case "$f" in *-merged.bin) continue;; esac
-  strings "$f" | grep -q "$TAG-$HASH" || { echo "wrong version inside $f"; exit 1; }
+  grep -qaF -- "$TAG-$HASH" "$f" || { echo "wrong version inside $f"; exit 1; }   # grep -a: binary file
 done
 rm -f "$OUT"/.log-*.txt
 ls -1 "$OUT"
