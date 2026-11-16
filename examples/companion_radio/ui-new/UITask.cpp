@@ -2,6 +2,7 @@
 #include <helpers/RadioProfiles.h>
 #include <helpers/ui/BatteryLevel.h>
 #include <helpers/ui/ClockFont.h>
+#include <helpers/ui/ChargeClockFont.h>
 #include <math.h>
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
@@ -48,6 +49,12 @@
     #define MSG_PAGE_MILLIS  4000
   #endif
 #endif
+
+#ifndef CHARGE_CLOCK_GLANCE_MILLIS
+  #define CHARGE_CLOCK_GLANCE_MILLIS 3000   // on battery: the big clock lights up this long once a minute
+#endif
+#define CHARGE_FLASH_STEP_MILLIS 250       // top of the hour: inverted / normal, three times
+#define CHARGE_FLASH_STEPS         6
 
 #ifndef FSCAN_MAX
   #define FSCAN_MAX 17
@@ -252,9 +259,11 @@ class HomeScreen : public UIScreen {
   bool _setup_edit;
   uint8_t _msg_row = 0;      // Msg scroll page: the setting under the cursor
   bool _msg_edit = false;    // Msg scroll page: changing settings
+  uint8_t _bcn_row = 0;      // Beacon page: To / Every / Moved
+  bool _bcn_edit = false;    // Beacon page: changing settings
 
   // Msg scroll page: running line and keyboard settings in one place
-  #define MSG_SET_ROWS 4
+  #define MSG_SET_ROWS 5
   #define MSG_SET_SHOWN 3
   void changeMsgSetting() {
     if (!_node_prefs) return;
@@ -266,8 +275,10 @@ class HomeScreen : public UIScreen {
       _node_prefs->kb_layout = _node_prefs->kb_layout ? 0 : 1;
     } else if (_msg_row == 2) {
       _node_prefs->auto_caps = _node_prefs->auto_caps ? 0 : 1;
-    } else {
+    } else if (_msg_row == 3) {
       _node_prefs->auto_cursor = _node_prefs->auto_cursor ? 0 : 1;
+    } else {
+      _node_prefs->charge_clock = _node_prefs->charge_clock ? 0 : 1;
     }
     the_mesh.savePrefs();
     _task->notify(UIEventType::ack);
@@ -1043,12 +1054,57 @@ public:
         display.setColor(UIColor::secondary_txt);
         display.drawTextCentered(display.width() / 2, display.height() - 11, "toggle: " PRESS_LABEL);
       }
+    } else if (_page == HomePage::BEACON && _bcn_edit) {
+      // settings: who gets the position, how often, after how far
+      char mode[20], target[32], pos[40], sent[24], every[12], moved[12], to[40];
+      the_mesh.formatBeacon(mode, sizeof(mode), target, sizeof(target), pos, sizeof(pos), sent, sizeof(sent));
+      the_mesh.formatBeaconRules(every, sizeof(every), moved, sizeof(moved));
+      const char* sp = strchr(mode, ' ');
+      if (_node_prefs && _node_prefs->beacon_mode == BEACON_OFF) strcpy(to, "off");
+      else if (_node_prefs && (_node_prefs->beacon_mode == BEACON_GROUP || _node_prefs->beacon_mode == BEACON_CHAT))
+        snprintf(to, sizeof(to), "%s%s", _node_prefs->beacon_mode == BEACON_GROUP ? "" : "@", target);
+      else snprintf(to, sizeof(to), "advert %s", target);
+      (void)sp;
+      if (the_mesh.beaconIntervalFixed() && _node_prefs && _node_prefs->beacon_mode != BEACON_OFF) {
+        char fixed[16];
+        snprintf(fixed, sizeof(fixed), "%s fix", every);
+        strcpy(every, fixed);
+      }
+      char to_shown[40];
+      display.translateUTF8ToBlocks(to_shown, to, sizeof(to_shown));
+      const char* rows_l[3] = { "To", "Every", "Moved" };
+      const char* rows_r[3] = { to_shown, every, moved };
+      display.setTextSize(1);
+      for (int i = 0; i < 3; i++) {
+        int y = 20 + i * 11;
+        bool off = strcmp(rows_r[i], "off") == 0;
+        display.setColor(UIColor::primary_txt);
+        if ((uint8_t)i == _bcn_row) {
+          display.fillRect(0, y - 1, display.width(), 10);
+          display.setColor(UIColor::window_bkg);
+        } else if (off) {
+          display.setColor(UIColor::secondary_txt);
+        }
+        display.drawTextLeftAlign(2, y, rows_l[i]);
+        int lw = display.getTextWidth("Moved") + 8;
+        int rw = display.getTextWidth(rows_r[i]);
+        if (rw > display.width() - 3 - lw) {
+          display.drawTextEllipsized(lw, y, display.width() - 3 - lw, rows_r[i]);
+        } else {
+          display.drawTextRightAlign(display.width() - 3, y, rows_r[i]);
+        }
+      }
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "hold:change 3x:done");
     } else if (_page == HomePage::BEACON) {
       char mode[20];
       char target[32];
       char pos[40];
       char sent[24];
       the_mesh.formatBeacon(mode, sizeof(mode), target, sizeof(target), pos, sizeof(pos), sent, sizeof(sent));
+      char every_s[12], moved_s[12];
+      the_mesh.formatBeaconRules(every_s, sizeof(every_s), moved_s, sizeof(moved_s));
+      bool move_on = strcmp(moved_s, "off") != 0 && _node_prefs && _node_prefs->beacon_mode != BEACON_OFF;
       char kind[16];
       char iv[8];
       kind[0] = iv[0] = 0;
@@ -1075,7 +1131,16 @@ public:
       char shown[32];
       display.translateUTF8ToBlocks(shown, target, sizeof(shown));
       display.setColor(UIColor::primary_txt);
-      display.drawTextEllipsized(0, y, display.width() - 1, shown);
+      int tw = display.width() - 1;
+      if (move_on) {   // distance trigger at the right: "+200m"
+        char mv[14];
+        snprintf(mv, sizeof(mv), "+%s", moved_s);
+        display.setColor(UIColor::secondary_txt);
+        display.drawTextRightAlign(display.width() - 1, y, mv);
+        tw -= display.getTextWidth(mv) + 4;
+        display.setColor(UIColor::primary_txt);
+      }
+      display.drawTextEllipsized(0, y, tw, shown);
       y += 12;
       display.setColor(strcmp(pos, "no fix") == 0 || strcmp(pos, "no gps") == 0
           ? UIColor::warning_txt : UIColor::secondary_txt);
@@ -1084,7 +1149,7 @@ public:
       display.setColor(UIColor::secondary_txt);
       display.drawTextLeftAlign(0, y, sent);
       if (display.height() > 80 && strcmp(kind, "off") != 0) {
-        display.drawTextCentered(display.width() / 2, display.height() - 11, "3x time    4x off");
+        display.drawTextCentered(display.width() / 2, display.height() - 11, "hold: settings  4x off");
       }
 #endif
 #if UI_SENSORS_PAGE == 1
@@ -1185,10 +1250,11 @@ public:
       // settings of incoming and outgoing messages; hold to change them
       bool ru = _task->langRu();
       const char* layout = _task->kbFreqLayout() ? (ru ? "частотн." : "freq") : (ru ? "ЙЦУКЕН" : "QWERTY");
-      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Keys layout", "Auto caps", "Auto cursor" };
+      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Keys layout", "Auto caps", "Auto cursor", "Big clock" };
       const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", layout,
                                            _task->autoCaps() ? "ON" : "OFF",
-                                           _task->autoCursor() ? "ON" : "OFF" };
+                                           _task->autoCursor() ? "ON" : "OFF",
+                                           _task->chargeClockEnabled() ? "ON" : "OFF" };
       display.setTextSize(1);
       // three rows on screen; the window follows the cursor
       int top = 0;
@@ -1250,6 +1316,7 @@ public:
     if (c == KEY_QUAD) {
 #if ENV_INCLUDE_GPS == 1
       if (_page != HomePage::BEACON) return false;
+      _bcn_edit = false;
       if (the_mesh.stopBeacon()) {
         _task->notify(UIEventType::ack);
         _task->showAlert("beacon off", 900);
@@ -1275,6 +1342,10 @@ public:
       }
 #endif
 #if ENV_INCLUDE_GPS == 1
+      if (_page == HomePage::BEACON && _bcn_edit) {   // triple: settings done
+        _bcn_edit = false;
+        return true;
+      }
       if (_page == HomePage::BEACON && the_mesh.cycleBeaconInterval()) {
         char mode[20];
         char target[32];
@@ -1307,8 +1378,15 @@ public:
         return true;
       }
 #endif
+#if ENV_INCLUDE_GPS == 1
+      if (_page == HomePage::BEACON && _bcn_edit) {
+        _bcn_row = (_bcn_row + 2) % 3;
+        return true;
+      }
+#endif
       _page = stepPage(-1);
       _msg_edit = false;
+      _bcn_edit = false;
       if (_page == HomePage::SETUP) {
         _setup_row = 0;
         _setup_edit = false;
@@ -1331,8 +1409,15 @@ public:
         return true;
       }
 #endif
+#if ENV_INCLUDE_GPS == 1
+      if (_page == HomePage::BEACON && _bcn_edit) {
+        _bcn_row = (_bcn_row + 1) % 3;
+        return true;
+      }
+#endif
       _page = stepPage(1);
       _msg_edit = false;
+      _bcn_edit = false;
       if (_page == HomePage::SETUP) {
         _setup_row = 0;
         _setup_edit = false;
@@ -1466,24 +1551,24 @@ public:
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BEACON) {
-      the_mesh.cycleBeacon();
-      char mode[20];
-      char target[32];
-      char pos[40];
-      char sent[24];
-      char alert[48];
-      the_mesh.formatBeacon(mode, sizeof(mode), target, sizeof(target), pos, sizeof(pos), sent, sizeof(sent));
-      snprintf(alert, sizeof(alert), "%s", mode);
-      if (target[0]) {
-        size_t used = strlen(alert);
-        if (used + 2 < sizeof(alert)) {
-          alert[used] = ' ';
-          alert[used + 1] = 0;
-          strncat(alert, target, sizeof(alert) - used - 2);
-        }
+      // first hold opens the settings; then hold changes the row under the cursor
+      if (!_bcn_edit) {
+        _bcn_edit = true;
+        _bcn_row = 0;
+        return true;
       }
+      if (_bcn_row == 1) {
+        if (the_mesh.cycleBeaconInterval()) _task->notify(UIEventType::ack);
+        else _task->showAlert("adverts: fixed time", 900);
+        return true;
+      }
+      if (_bcn_row == 2) {
+        the_mesh.cycleBeaconMove();
+        _task->notify(UIEventType::ack);
+        return true;
+      }
+      the_mesh.cycleBeacon();
       _task->notify(UIEventType::ack);
-      _task->showAlert(alert, 900);
       return true;
     }
 #endif
@@ -2065,6 +2150,321 @@ public:
   }
 };
 
+// Big digits (ChargeClockFont): ink width of a string such as "12:34" or "--:--".
+static int bigInkWidth(const ClockFace& face, const char* text) {
+  int w = 0, last_gap = 0;
+  for (const char* s = text; *s; s++) {
+    ClockGlyph g;
+    if (!clockFind(face, (uint8_t)(*s == '-' ? '0' : *s), g)) continue;
+    w += g.advance;
+    last_gap = g.advance - g.w;
+  }
+  return w - last_gap;
+}
+
+// '-' (no time yet) is a bar across a digit cell
+static void bigDraw(DisplayDriver& display, const ClockFace& face, int x, int y, const char* text) {
+  for (const char* s = text; *s; s++) {
+    ClockGlyph g;
+    if (*s == '-') {
+      if (!clockFind(face, '0', g)) continue;
+      int t = g.h / 12 > 3 ? g.h / 12 : 3;
+      display.fillRectPx(x, y + (g.h - t) / 2, g.w, t);
+      x += g.advance;
+      continue;
+    }
+    if (!clockFind(face, (uint8_t)*s, g)) continue;
+    if (g.w && g.h) display.blit1(x, y + g.top, g.w, g.h, face.bits + g.offset);
+    x += g.advance;
+  }
+}
+
+// The largest face whose digits fit in max_w x max_h physical pixels.
+static const ClockFace& bigFace(const char* text, int max_w, int max_h) {
+  const int n = sizeof(CHARGE_DIGIT_FACES) / sizeof(CHARGE_DIGIT_FACES[0]);
+  for (int i = 0; i < n; i++) {
+    ClockGlyph g;
+    if (!clockFind(*CHARGE_DIGIT_FACES[i], '0', g)) continue;
+    if (g.h <= max_h && bigInkWidth(*CHARGE_DIGIT_FACES[i], text) <= max_w) return *CHARGE_DIGIT_FACES[i];
+  }
+  return *CHARGE_DIGIT_FACES[n - 1];
+}
+
+// Draws text centred between the corner bands; x_shift moves it sideways.
+static void bigDrawCentred(DisplayDriver& display, const char* text, int band, int x_shift = 0) {
+  int fw = display.frameWidth(), fh = display.frameHeight();
+  int area = fh - 2 * band;
+  const ClockFace& face = bigFace(text, fw - 2, area);
+  ClockGlyph g0;
+  clockFind(face, '0', g0);
+  int x = (fw - bigInkWidth(face, text)) / 2;
+  int room = x < 2 ? x : 2;
+  if (x_shift > room) x_shift = room;
+  if (x_shift < -room) x_shift = -room;
+  bigDraw(display, face, x + x_shift, band + (area - g0.h) / 2, text);
+}
+
+// Big clock: on the charger (boards that sense USB power) or always (boards
+// that can't). HH:MM fills the screen between two rows of corners:
+//   weekday            battery % / new messages
+//          HH:MM
+//   day                month
+// At the top of every hour the screen flashes inverted three times.
+class ChargeClockScreen : public UIScreen {
+  UITask* _task;
+  mesh::RTCClock* _rtc;
+  MsgPreviewScreen* _preview;
+  NodePrefs* _prefs;
+  int _flash_hour = -1;               // the hour whose flash already ran
+  unsigned long _flash_start = 0;
+  bool _flashing = false;
+
+public:
+  ChargeClockScreen(UITask* task, mesh::RTCClock* rtc, MsgPreviewScreen* preview, NodePrefs* prefs)
+    : _task(task), _rtc(rtc), _preview(preview), _prefs(prefs) {}
+
+  int render(DisplayDriver& display) override {
+    int fw = display.frameWidth(), fh = display.frameHeight();
+    int W = display.width(), H = display.height();
+    bool en = _prefs && _prefs->ui_lang == UI_LANG_EN;
+
+    uint32_t now = _rtc->getCurrentTime();
+    bool valid = now >= 1000000000UL;
+    int64_t local = (int64_t)now + (int64_t)(_prefs ? _prefs->tz_offset_mins : 0) * 60;
+    if (local < 0) local = 0;
+    uint32_t lt = (uint32_t)local;
+    int hh = (int)((lt / 3600UL) % 24UL), mm = (int)((lt / 60UL) % 60UL), ss = (int)(lt % 60UL);
+
+    // top of the hour: start the flash once per hour
+    if (valid && mm == 0 && ss < 30 && _flash_hour != hh) {
+      _flash_hour = hh;
+      _flash_start = millis();
+      _flashing = true;
+    }
+    bool inverted = false;
+    int next = 0;
+    if (_flashing) {
+      unsigned long el = millis() - _flash_start;
+      int step = (int)(el / CHARGE_FLASH_STEP_MILLIS);
+      if (step >= CHARGE_FLASH_STEPS) {
+        _flashing = false;
+      } else {
+        inverted = (step % 2) == 0;
+        next = CHARGE_FLASH_STEP_MILLIS - (int)(el % CHARGE_FLASH_STEP_MILLIS);
+      }
+    }
+    if (inverted) {
+      display.setColor(UIColor::primary_txt);
+      display.fillRectPx(0, 0, fw, fh);
+    }
+    display.setColor(inverted ? UIColor::window_bkg : UIColor::primary_txt);
+
+    // corners, in the logical grid; a row of text is 9 of 64 rows
+    display.setTextSize(1);
+    int band = (9 * fh + H - 1) / H;
+    char buf[16];
+    if (valid) {
+      int year, month, day, wday;
+      clockYmdFromUnix(lt, year, month, day, wday);
+      static const char* wd_en[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+      static const char* wd_ru[] = {"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"};
+      display.drawTextLeftAlign(0, 0, en ? wd_en[wday] : wd_ru[wday]);
+      sprintf(buf, "%02d", day);
+      display.drawTextLeftAlign(0, H - 9, buf);
+      sprintf(buf, "%02d", month);
+      display.drawTextRightAlign(W - 1, H - 9, buf);
+      (void)year;
+    }
+    int unread = _preview ? _preview->unreadCount() : 0;
+    if (unread > 0) {
+      sprintf(buf, en ? "new: %d" : "нов: %d", unread);
+    } else {
+      int mv = _task->getBattMilliVolts();
+      int pct = (mv - BATT_MIN_MILLIVOLTS) * 100 / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
+      if (pct < 0) pct = 0;
+      if (pct > 100) pct = 100;
+      sprintf(buf, "%d%%", pct);
+      if (mv <= 0) buf[0] = 0;
+    }
+    if (buf[0]) display.drawTextRightAlign(W - 1, 0, buf);
+
+    // HH:MM: the largest face that fits between the corner rows
+    char t[6];
+    if (valid) sprintf(t, "%02d:%02d", hh, mm);
+    else strcpy(t, "--:--");
+    // OLED burn-in: the digits wander a couple of pixels sideways, one step a minute
+    bigDrawCentred(display, t, band, mm % 5 - 2);
+    display.markFull();
+
+    if (next > 0) return next;
+    if (!valid) return 60000;
+    int wait = (60 - ss) * 1000;
+    return wait < 1000 ? 1000 : wait;
+  }
+
+  bool handleInput(char c) override {
+    if (_preview && _preview->unreadCount() > 0) _task->showMsgPreview();
+    else _task->gotoHomeScreen();
+    return true;
+  }
+};
+
+// Stopwatch and timer, one button. Six clicks or more open it (the Write
+// keyboard keeps its own five-click key); every other gesture stays as it was.
+//   stopwatch: counts from the moment it opens. press - exit, hold - timer
+//   timer set: press +1 min, double +5 min, hold - start, triple - exit
+//   timer run: press - exit (it keeps running), hold - cancel
+//   time is up: the screen flashes (and beeps where there is a buzzer); press - exit
+class TimerScreen : public UIScreen {
+public:
+  enum Mode { SW, SET, RUN, DONE };
+private:
+  UITask* _task;
+  Mode _mode = SW;
+  unsigned long _sw_start = 0;
+  unsigned long _end = 0;          // timer: millis() when it rings
+  unsigned long _rang_at = 0;
+  unsigned long _next_beep = 0;
+  int _minutes = 1;
+
+  static void fmt(char* buf, unsigned long secs) {
+    unsigned long h = secs / 3600UL, m = (secs / 60UL) % 60UL, sec = secs % 60UL;
+    if (h > 0) sprintf(buf, "%lu:%02lu:%02lu", h, m, sec);
+    else sprintf(buf, "%02lu:%02lu", m, sec);
+  }
+
+public:
+  TimerScreen(UITask* task) : _task(task) {}
+
+  // six clicks: a running timer is shown, otherwise a fresh stopwatch starts
+  void open() {
+    if (_mode == RUN || _mode == DONE) return;
+    _mode = SW;
+    _sw_start = millis();
+  }
+  // the timer ran out while another screen was up
+  bool due() const { return _mode == RUN && (long)(millis() - _end) >= 0; }
+
+  int render(DisplayDriver& display) override {
+    bool ru = _task->langRu();
+    bool eink = _task->isEink();
+    int fw = display.frameWidth(), fh = display.frameHeight();
+    int W = display.width(), H = display.height();
+    int band = (9 * fh + H - 1) / H;
+    unsigned long now = millis();
+
+    if (_mode == RUN && (long)(now - _end) >= 0) {
+      _mode = DONE;
+      _rang_at = now;
+      _next_beep = now;
+    }
+
+    bool inverted = false;
+    if (_mode == DONE) {
+      unsigned long el = now - _rang_at;
+      if (el < 60000UL) {                  // a minute of flashing, then it stays quiet
+        inverted = !eink && (el / 500UL) % 2 == 0;
+        if ((long)(now - _next_beep) >= 0) {
+          _task->notify(UIEventType::contactMessage);
+          _next_beep = now + 2000;
+        }
+      }
+    }
+    if (inverted) {
+      display.setColor(UIColor::primary_txt);
+      display.fillRectPx(0, 0, fw, fh);
+    }
+    display.setColor(inverted ? UIColor::window_bkg : UIColor::primary_txt);
+    display.setTextSize(1);
+
+    const char* title;
+    const char* hint;
+    char t[12];
+    int wait = 1000;
+    switch (_mode) {
+      case SW: {
+        unsigned long ms = now - _sw_start;
+        fmt(t, ms / 1000UL);
+        title = ru ? "Секундомер" : "Stopwatch";
+        hint = ru ? "держать: таймер" : "hold: timer";
+        if (!eink) {   // tenths in the top-right corner
+          char d[4];
+          sprintf(d, ".%lu", (ms / 100UL) % 10UL);
+          display.drawTextRightAlign(W - 1, 0, d);
+          wait = 100 - (int)(ms % 100UL);
+        } else {
+          wait = 1000 - (int)(ms % 1000UL);
+        }
+        break;
+      }
+      case SET:
+        sprintf(t, "%02d:00", _minutes);
+        title = ru ? "Таймер" : "Timer";
+        hint = ru ? "клик +1, держать: старт" : "click +1, hold: start";
+        wait = 60000;
+        break;
+      case RUN: {
+        unsigned long left = _end - now;
+        fmt(t, (left + 999UL) / 1000UL);
+        title = ru ? "Таймер" : "Timer";
+        hint = ru ? "держать: отмена" : "hold: cancel";
+        wait = (int)(left % 1000UL) + 1;
+        break;
+      }
+      default:
+        strcpy(t, "00:00");
+        title = ru ? "Время вышло!" : "Time is up!";
+        hint = ru ? "нажать: выход" : "press: exit";
+        wait = 250;
+        break;
+    }
+    if (eink && wait < 5000 && _mode != DONE) wait = 5000;   // e-ink: no second-by-second refresh
+    display.drawTextLeftAlign(0, 0, title);
+    display.drawTextCentered(W / 2, H - 9, hint);
+    bigDrawCentred(display, t, band);
+    display.markFull();
+    return wait;
+  }
+
+  bool handleInput(char c) override {
+    switch (_mode) {
+      case SW:
+        if (c == KEY_ENTER) { _mode = SET; _minutes = 1; return true; }
+        _task->gotoHomeScreen();
+        return true;
+      case SET:
+        if (c == KEY_NEXT || c == KEY_RIGHT) { _minutes = _minutes >= 99 ? 1 : _minutes + 1; return true; }
+        if (c == KEY_PREV || c == KEY_LEFT) { _minutes = _minutes + 5 > 99 ? 99 : _minutes + 5; return true; }
+        if (c == KEY_ENTER) {
+          _mode = RUN;
+          _end = millis() + (unsigned long)_minutes * 60000UL;
+          _task->notify(UIEventType::ack);
+          return true;
+        }
+        _mode = SW;   // triple / quad: leave without a timer
+        _task->gotoHomeScreen();
+        return true;
+      case RUN:
+        if (c == KEY_ENTER) {
+          _mode = SW;
+          _task->notify(UIEventType::ack);
+        }
+        _task->gotoHomeScreen();
+        return true;
+      default:   // DONE
+        _mode = SW;
+        _task->gotoHomeScreen();
+        return true;
+    }
+  }
+};
+
+void UITask::openStopwatch() {
+  if (!stopwatch) return;
+  ((TimerScreen*)stopwatch)->open();
+  setCurrScreen(stopwatch);
+}
+
 void UITask::toggleTicker() {
 #ifdef UI_MSG_TICKER
   _node_prefs->msg_ticker = _node_prefs->msg_ticker ? 0 : 1;
@@ -2117,6 +2517,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
   clock = (display != NULL && display->isEink())
       ? new ClockScreen(this, &rtc_clock, (MsgPreviewScreen*)msg_preview, node_prefs) : NULL;
+  stopwatch = display != NULL ? new TimerScreen(this) : NULL;
+  charge_clock = (display != NULL && !display->isEink())
+      ? new ChargeClockScreen(this, &rtc_clock, (MsgPreviewScreen*)msg_preview, node_prefs) : NULL;
 #ifdef BOOK_READER
   reader = display != NULL ? new ReaderScreen(this, &book_store) : NULL;
 #endif
@@ -2163,6 +2566,11 @@ bool UITask::onUiAck(const uint8_t* ack, uint8_t* key_out) {
   memcpy(key_out, e->to.key, 6);
   if (curr == sent) _next_refresh = 100;
   return true;
+}
+
+void UITask::onUiRetry(uint32_t old_ack, uint32_t new_ack, unsigned long until) {
+  _sent_log.retry(old_ack, new_ack, until);
+  if (curr == sent || curr == compose) _next_refresh = 100;
 }
 
 int UITask::getUnreadCount() const {
@@ -2231,7 +2639,7 @@ void UITask::clearTakenMsg() {
   // read or dismissed with the button: neither the phone nor the running line
   // marks it read here.
   if (!msg_preview) return;
-  if (curr == msg_preview || curr == clock || curr == home) {
+  if (curr == msg_preview || curr == clock || curr == charge_clock || curr == home) {
     _next_refresh = 100;
   }
 }
@@ -2241,7 +2649,7 @@ void UITask::msgRead(int msgcount) {
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
   // an open message window stays open: only button presses read it
-  if (msgcount == 0 && curr != clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays()) {
+  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -2252,7 +2660,8 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text, group);
-  if (curr == clock || inReader() || inCompose() || inSent() || inRelays()) {   // reader, writer and Sent only show an envelope
+  _idle_since = millis();   // the big clock waits before covering the new message
+  if (curr == clock || inReader() || inCompose() || inSent() || inRelays() || inStopwatch()) {   // reader, writer and Sent only show an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
@@ -2288,6 +2697,56 @@ void UITask::userLedHandler() {
     }
     digitalWrite(PIN_STATUS_LED, led_state == LED_STATE_ON);
   }
+#endif
+}
+
+bool UITask::canSensePower() const {
+#ifdef NRF52_PLATFORM
+  return true;    // USB VBUS is read from the nRF52 power block
+#else
+  return false;   // ESP32 boards: isExternalPowered() is always false
+#endif
+}
+
+// Big clock. Where USB power can be sensed: on the charger the clock stays
+// lit; on battery the screen lights up for a moment at every new minute.
+// Elsewhere the clock stays lit whenever the setting is on.
+void UITask::updateChargeClock() {
+#if AUTO_OFF_MILLIS > 0
+  if (charge_clock == NULL || _display == NULL || _node_prefs == NULL) return;
+  if (_node_prefs->charge_clock == 0) {
+    if (curr == charge_clock) gotoHomeScreen();
+    return;
+  }
+  bool steady = !canSensePower() || (_board != NULL && _board->isExternalPowered());
+  bool idle = (long)(millis() - _idle_since) >= (long)AUTO_OFF_MILLIS;
+  // never pull the user out of writing, reading or a settings page
+  bool calm = curr == charge_clock || curr == home || curr == msg_preview;
+  if (!calm) return;
+
+  if (steady) {
+    if (curr != charge_clock) {
+      if (!idle) return;
+      setCurrScreen(charge_clock);
+    }
+    if (!_display->isOn()) _display->turnOn();
+    _auto_off = millis() + AUTO_OFF_MILLIS;
+    return;
+  }
+
+  // on battery: a short look once a minute while the screen is dark
+  uint32_t now = rtc_clock.getCurrentTime();
+  if (now < 1000000000UL) return;
+  uint32_t minute = now / 60UL;
+  if (_display->isOn() || (curr != charge_clock && !idle)) {
+    _glance_minute = minute;
+    return;
+  }
+  if (minute == _glance_minute) return;
+  _glance_minute = minute;
+  setCurrScreen(charge_clock);
+  _display->turnOn();
+  _auto_off = millis() + CHARGE_CLOCK_GLANCE_MILLIS;
 #endif
 }
 
@@ -2377,6 +2836,8 @@ void UITask::loop() {
     c = handleQuadClick(KEY_QUAD);
   } else if (ev == BUTTON_EVENT_PENTA_CLICK) {   // only the Write keyboard tells five from four
     c = handleQuadClick((inCompose() || inSent()) ? KEY_PENTA : KEY_QUAD);
+  } else if (ev == BUTTON_EVENT_HEXA_CLICK) {    // six or more: stopwatch (the keyboard keeps its five)
+    c = handleManyClicks();
   }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
@@ -2404,6 +2865,8 @@ void UITask::loop() {
       c = handleQuadClick(KEY_QUAD);
     } else if (ev == BUTTON_EVENT_PENTA_CLICK) {
       c = handleQuadClick((inCompose() || inSent()) ? KEY_PENTA : KEY_QUAD);
+    } else if (ev == BUTTON_EVENT_HEXA_CLICK) {
+      c = handleManyClicks();
     }
     _analogue_pin_read_millis = millis();
   }
@@ -2434,6 +2897,16 @@ void UITask::loop() {
 #endif
 
   if (curr) curr->poll();
+
+  updateChargeClock();
+
+  if (stopwatch != NULL && _display != NULL) {
+    if (((TimerScreen*)stopwatch)->due() && curr != stopwatch) {   // time is up while elsewhere
+      setCurrScreen(stopwatch);
+      if (!_display->isOn()) _display->turnOn();
+    }
+    if (curr == stopwatch) _auto_off = millis() + AUTO_OFF_MILLIS;   // counting stays in view
+  }
 
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {
@@ -2531,7 +3004,17 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch()) return c;
+  return 0;
+}
+
+// six clicks or more: the Write keyboard and Sent page take them as five,
+// anywhere else they open the stopwatch (or the running timer)
+char UITask::handleManyClicks() {
+  if (inCompose() || inSent()) return handleQuadClick(KEY_PENTA);
+  if (_display == NULL || stopwatch == NULL) return 0;
+  if (!_display->isOn()) _display->turnOn();
+  openStopwatch();
   return 0;
 }
 
@@ -2539,7 +3022,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch()) return c;
   toggleBuzzer();
   return 0;
 }

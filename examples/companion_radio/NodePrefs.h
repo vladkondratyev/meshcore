@@ -60,6 +60,7 @@ public:
   uint8_t  beacon_group_mins = 30;
   uint8_t  beacon_chat_mins = 30;
   uint8_t  beacon_pub[32];       // contact public key when beacon_mode == BEACON_CHAT
+  uint8_t  beacon_move = 0;      // also send after moving this far: index into BEACON_MOVE_METERS, 0 = off
   uint8_t autoadd_config = 0;    // bitmask for auto-add contacts config
   uint8_t rx_boosted_gain = 0; // SX126x RX boosted gain mode (0=power saving, 1=boosted)
   uint8_t mcu_sleep = 0;       // 1 = light-sleep the MCU while idle (ESP32)
@@ -78,6 +79,7 @@ public:
   uint8_t kb_layout = 0;         // Write keyboard: 0 = ЙЦУКЕН / QWERTY, 1 = frequent letters together
   uint8_t auto_caps = 1;         // 1 = a capital at the start and after . ! ?
   uint8_t auto_cursor = 0;       // 1 = after a letter the keyboard cursor moves to the likely next one
+  uint8_t charge_clock = 0;      // 1 = big clock instead of a dark screen (on the charger, or always where power can't be sensed)
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
   uint8_t clock_nodes[CLOCK_NODE_MAX][32];  // pubkeys to poll for time; empty slots are zeros
 
@@ -128,6 +130,7 @@ private:
       def("bcn_gm", _parent->beacon_group_mins);
       def("bcn_cm", _parent->beacon_chat_mins);
       def("bcn_pub", (void *) _parent->beacon_pub, sizeof(_parent->beacon_pub));
+      def("bcn_mv", _parent->beacon_move);
     }
   public:
     GPSPrefs(NodePrefs* parent) : _parent(parent) { }
@@ -172,6 +175,7 @@ private:
       def("kbl", _parent->kb_layout);       // keyboard layout
       def("caps", _parent->auto_caps);      // automatic capitals
       def("acur", _parent->auto_cursor);    // keyboard cursor follows the likely next letter
+      def("chclk", _parent->charge_clock);  // big clock on the charger
       def("tvalid", _parent->time_valid);
       for (int i = 0; i < CLOCK_NODE_MAX; i++) {
         char key[8];

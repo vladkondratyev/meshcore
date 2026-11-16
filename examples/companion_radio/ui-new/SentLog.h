@@ -66,6 +66,18 @@ public:
     return e;
   }
 
+  // the message went out again under a new ack
+  void retry(uint32_t old_ack, uint32_t new_ack, unsigned long until) {
+    for (int i = 0; i < _n; i++) {
+      SentEntry* e = get(i);
+      if ((e->kind == 1 || e->kind == 2) && !e->delivered && e->ack == old_ack) {
+        e->ack = new_ack;
+        e->ack_until = until;
+        return;
+      }
+    }
+  }
+
   // an ack arrived: returns the entry it confirms, or NULL
   SentEntry* ack(const uint8_t* data) {
     for (int i = 0; i < _n; i++) {

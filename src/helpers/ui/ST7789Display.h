@@ -47,6 +47,7 @@ public:
   int frameWidth() override { return display.getWidth(); }
   int frameHeight() override { return display.getHeight(); }
   void fillRectPx(int x, int y, int w, int h) override { display.fillRect(x, y, w, h); }
+  void blit1(int x, int y, int w, int h, const uint8_t* bits) override;   // physical pixels, 1:1
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
 };

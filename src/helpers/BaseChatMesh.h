@@ -74,10 +74,11 @@ class BaseChatMesh : public mesh::Mesh {
   uint8_t temp_buf[MAX_TRANS_UNIT];
   ConnectionInfo connections[MAX_CONNECTIONS];
 
-  mesh::Packet* composeMsgPacket(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, const char *text, uint32_t& expected_ack);
   void sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, uint8_t ack_len=4);
 
 protected:
+  // the companion's on-device sender picks flood or direct per attempt itself
+  mesh::Packet* composeMsgPacket(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, const char *text, uint32_t& expected_ack);
   BaseChatMesh(mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::PacketManager& mgr, mesh::MeshTables& tables)
       : mesh::Mesh(radio, ms, rng, rtc, mgr, tables)
   {

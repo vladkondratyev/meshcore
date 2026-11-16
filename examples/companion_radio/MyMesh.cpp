@@ -290,17 +290,62 @@ int MyMesh::getFromOfflineQueue(uint8_t frame[], bool* was_shown) {
 }
 
 int MyMesh::uiSendDirect(const uint8_t* pub_prefix, const char* text) {
-  ContactInfo* recipient = lookupContactByPubKey(pub_prefix, 6);
-  if (recipient == NULL || text[0] == 0) return 0;
-  uint32_t expected_ack = 0, est_timeout = 0;
-  uint32_t ts = getRTCClock()->getCurrentTimeUnique();
-  int result = sendMessage(*recipient, ts, 0, text, expected_ack, est_timeout);
-  if (result == MSG_SEND_FAILED) return 0;
+  if (lookupContactByPubKey(pub_prefix, 6) == NULL || text[0] == 0) return 0;
+  if (strlen(text) > MAX_TEXT_LEN) return 0;
+  memcpy(_ui_try_key, pub_prefix, 6);
+  strcpy(_ui_try_text, text);
+  _ui_try_ts = getRTCClock()->getCurrentTimeUnique();
+  memset(_ui_try_acks, 0, sizeof(_ui_try_acks));
+  _ui_try = 0;
+  _ui_ack = 0;
+  _ui_ack_ok = false;
+  return uiSendAttempt();
+}
+
+// One attempt of the message in _ui_try_text. The first always floods (the
+// stored path may be stale); later ones go direct when a path is known.
+// Returns 0 failed, 1 direct, 2 flood.
+int MyMesh::uiSendAttempt() {
+  ContactInfo* recipient = lookupContactByPubKey(_ui_try_key, 6);
+  if (recipient == NULL) return 0;
+  uint32_t expected_ack = 0;
+  mesh::Packet* pkt = composeMsgPacket(*recipient, _ui_try_ts, _ui_try, _ui_try_text, expected_ack);
+  if (pkt == NULL) return 0;
+  uint32_t airtime = _radio->getEstAirtimeFor(pkt->getRawLength());
+  uint32_t timeout;
+  int rc;
+  if (_ui_try == 0 || recipient->out_path_len == OUT_PATH_UNKNOWN) {
+    sendFloodScoped(*recipient, pkt);
+    timeout = calcFloodTimeoutMillisFor(airtime);
+    rc = 2;
+  } else {
+    sendDirect(pkt, recipient->out_path, recipient->out_path_len);
+    timeout = calcDirectTimeoutMillisFor(airtime, recipient->out_path_len);
+    rc = 1;
+  }
+  _ui_try_acks[_ui_try] = expected_ack;
   _ui_ack = expected_ack;
   _ui_ack_ok = false;
   _ui_ack_contact = recipient;
-  _ui_ack_until = futureMillis(est_timeout + 2000);
-  return result == MSG_SEND_SENT_FLOOD ? 2 : 1;
+  _ui_ack_until = futureMillis(timeout + 2000);
+  return rc;
+}
+
+// No ack in time and tries left: send again, and move the Sent list entry
+// over to the new ack.
+void MyMesh::uiRetryCheck() {
+  if (_ui_ack == 0 || _ui_ack_ok || !millisHasNowPassed(_ui_ack_until)) return;
+  if (_ui_try + 1 >= UI_SEND_ATTEMPTS) return;   // last one: "No reply"
+  uint32_t old_ack = _ui_ack;
+  _ui_try++;
+  if (uiSendAttempt() == 0) {
+    _ui_try = UI_SEND_ATTEMPTS - 1;   // contact gone: stop, the old deadline stands
+    _ui_ack = old_ack;
+    return;
+  }
+#ifdef DISPLAY_CLASS
+  if (_ui) _ui->onUiRetry(old_ack, _ui_ack, _ui_ack_until);
+#endif
 }
 
 bool MyMesh::uiMyPosition(char* buf, size_t n) {
@@ -347,6 +392,7 @@ bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
 uint8_t MyMesh::uiAckState() const {
   if (_ui_ack_ok) return UI_ACK_OK;
   if (_ui_ack == 0) return UI_ACK_NONE;
+  if (_ui_try + 1 < UI_SEND_ATTEMPTS) return UI_ACK_WAIT;   // another try is coming
   return millisHasNowPassed(_ui_ack_until) ? UI_ACK_LOST : UI_ACK_WAIT;
 }
 
@@ -592,13 +638,21 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
-  if (_ui_ack != 0 && memcmp(data, &_ui_ack, 4) == 0) {   // a message sent from the device UI
+  bool ui_hit = false;   // a message sent from the device UI: any of its attempts
+  if (_ui_ack != 0) {
+    for (int i = 0; i <= _ui_try && i < UI_SEND_ATTEMPTS; i++) {
+      if (_ui_try_acks[i] != 0 && memcmp(data, &_ui_try_acks[i], 4) == 0) ui_hit = true;
+    }
+  }
+  if (ui_hit) {
+    uint32_t current = _ui_ack;   // the Sent list holds the latest attempt's ack
     _ui_ack = 0;
     _ui_ack_ok = true;
+    memset(_ui_try_acks, 0, sizeof(_ui_try_acks));
 #ifdef DISPLAY_CLASS
     if (_ui) {
       uint8_t key[6];
-      _ui->onUiAck(data, key);   // marks it in the Sent list
+      _ui->onUiAck((const uint8_t*)&current, key);   // marks it in the Sent list
       _ui->notify(UIEventType::ack);
     }
 #endif
@@ -1319,8 +1373,10 @@ void MyMesh::begin(bool has_display) {
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
   _prefs.beacon_mode = constrain(_prefs.beacon_mode, BEACON_OFF, BEACON_CHAT);
-  if (_prefs.beacon_group_mins < 5 || _prefs.beacon_group_mins > 180) _prefs.beacon_group_mins = 30;
-  if (_prefs.beacon_chat_mins < 5 || _prefs.beacon_chat_mins > 180) _prefs.beacon_chat_mins = 30;
+  // 0 = no timed send (the distance trigger alone)
+  if (_prefs.beacon_group_mins != 0 && (_prefs.beacon_group_mins < 5 || _prefs.beacon_group_mins > 180)) _prefs.beacon_group_mins = 30;
+  if (_prefs.beacon_chat_mins != 0 && (_prefs.beacon_chat_mins < 5 || _prefs.beacon_chat_mins > 180)) _prefs.beacon_chat_mins = 30;
+  if (_prefs.beacon_move > 6) _prefs.beacon_move = 0;
 #ifdef MAX_GROUP_CHANNELS
   if (MAX_GROUP_CHANNELS > 0) {
     _prefs.beacon_chan = constrain(_prefs.beacon_chan, 0, MAX_GROUP_CHANNELS - 1);
@@ -3390,6 +3446,7 @@ bool MyMesh::pullClock() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+  uiRetryCheck();
 
   {   // a relay switched (or failed): tell whoever asked by a mesh text
     int idx; bool ok, scan, reply; uint8_t key[6];
@@ -3426,7 +3483,15 @@ void MyMesh::loop() {
 }
 
 #if ENV_INCLUDE_GPS == 1
-#define BEACON_RECENT_CHATS  8
+#define BEACON_FAV_CHATS     16   // favourite contacts offered as beacon targets
+#define BEACON_CHECK_MS      5000UL   // how often the position is compared with the last one sent
+// Distance trigger steps. Walking: 50-200 m; cycling, car: 500 m - 2 km.
+static const uint16_t BEACON_MOVE_METERS[] = { 0, 50, 100, 200, 500, 1000, 2000 };
+#define BEACON_MOVE_STEPS  (sizeof(BEACON_MOVE_METERS) / sizeof(BEACON_MOVE_METERS[0]))
+// The distance trigger never sends more often than this: GPS jitter and
+// a fast car must not flood the mesh.
+#define BEACON_MOVE_GAP_MS        (60UL * 1000UL)
+#define BEACON_MOVE_GAP_FLOOD_MS  (5UL * 60UL * 1000UL)
 #define BEACON_LOCAL_MS      (10UL * 60UL * 1000UL)
 #define BEACON_FLOOD_MS      (30UL * 60UL * 1000UL)
 #define BEACON_FIRST_MS      20000UL
@@ -3476,32 +3541,26 @@ int MyMesh::buildBeaconOptions(BeaconOpt* out, int max_out) {
     n++;
   }
 #endif
-  struct ChatPick {
-    uint32_t ts;
-    uint8_t pub[PUB_KEY_SIZE];
-  };
-  ChatPick pick[BEACON_RECENT_CHATS];
-  int npick = 0;
+  // favourite contacts (the star in the app), as on the Write page; a contact
+  // chosen earlier stays on the list even if it lost its star
+  bool have_current = false;
+  int nfav = 0;
   int total = getTotalContactSlots();
-  for (int i = 0; i < total; i++) {
+  for (int i = 0; i < total && n < max_out; i++) {
     ContactInfo c;
     if (!getContactByIdx((uint32_t)i, c)) continue;
     if (c.type != ADV_TYPE_CHAT || c.name[0] == 0) continue;
-    int at = 0;
-    while (at < npick && pick[at].ts >= c.last_advert_timestamp) at++;
-    if (at >= BEACON_RECENT_CHATS) continue;
-    int last = (npick < BEACON_RECENT_CHATS) ? npick : (BEACON_RECENT_CHATS - 1);
-    for (int j = last; j > at; j--) pick[j] = pick[j - 1];
-    pick[at].ts = c.last_advert_timestamp;
-    memcpy(pick[at].pub, c.id.pub_key, PUB_KEY_SIZE);
-    if (npick < BEACON_RECENT_CHATS) npick++;
-  }
-  for (int i = 0; i < npick && n < max_out; i++) {
+    bool current = memcmp(c.id.pub_key, _prefs.beacon_pub, PUB_KEY_SIZE) == 0;
+    if ((c.flags & 0x01) == 0 && !current) continue;   // bit 0 = favourite
+    if (!current && nfav >= BEACON_FAV_CHATS) continue;
+    if (current) have_current = true;
+    else nfav++;
     out[n].mode = BEACON_CHAT;
     out[n].chan = 0;
-    memcpy(out[n].pub, pick[i].pub, PUB_KEY_SIZE);
+    memcpy(out[n].pub, c.id.pub_key, PUB_KEY_SIZE);
     n++;
   }
+  (void)have_current;
   return n;
 }
 
@@ -3559,8 +3618,9 @@ void MyMesh::formatBeacon(char* mode, size_t mode_sz, char* target, size_t targe
   if (_prefs.beacon_mode == BEACON_OFF) {
     beaconCopy(mode, mode_sz, mode_name);
   } else {
-    unsigned mins = (unsigned)(beaconIntervalMs() / 60000UL);
-    snprintf(mode, mode_sz, "%s %um", mode_name, mins);
+    char every[12], moved[12];
+    formatBeaconRules(every, sizeof(every), moved, sizeof(moved));
+    snprintf(mode, mode_sz, "%s %s", mode_name, every);
   }
   beaconCopy(target, target_sz, target_name);
 
@@ -3599,9 +3659,9 @@ bool MyMesh::stopBeacon() {
 void MyMesh::cycleBeacon() {
   bool was_off = (_prefs.beacon_mode == BEACON_OFF);
 #ifndef MAX_GROUP_CHANNELS
-  #define BEACON_OPT_MAX (3 + BEACON_RECENT_CHATS)
+  #define BEACON_OPT_MAX (3 + BEACON_FAV_CHATS + 1)
 #else
-  #define BEACON_OPT_MAX (3 + MAX_GROUP_CHANNELS + BEACON_RECENT_CHATS)
+  #define BEACON_OPT_MAX (3 + MAX_GROUP_CHANNELS + BEACON_FAV_CHATS + 1)
 #endif
   static BeaconOpt opts[BEACON_OPT_MAX];
   int n = buildBeaconOptions(opts, BEACON_OPT_MAX);
@@ -3622,8 +3682,11 @@ void MyMesh::cycleBeacon() {
   if (next.mode != BEACON_OFF) {
     _prefs.gps_enabled = 1;
     sensors.setSettingValue("gps", "1");
-    if (was_off) _beacon_next = futureMillis(BEACON_FIRST_MS);
+    // a new target gets the position soon, then follows the time / distance rules
+    _beacon_have_pos = false;
+    _beacon_next = futureMillis(BEACON_FIRST_MS);
   }
+  (void)was_off;
   savePrefs();
 }
 
@@ -3633,16 +3696,68 @@ bool MyMesh::cycleBeaconInterval() {
   else if (_prefs.beacon_mode == BEACON_CHAT) slot = &_prefs.beacon_chat_mins;
   else return false;
 
-  static const uint8_t steps[] = { 5, 10, 15, 30, 60, 120 };
+  // 0 = no timed send; offered only while the distance trigger is on,
+  // otherwise the beacon would never send
+  static const uint8_t steps[] = { 0, 5, 10, 15, 30, 60, 120 };
   const int nsteps = (int)(sizeof(steps) / sizeof(steps[0]));
   int i = 0;
   while (i < nsteps && steps[i] != *slot) i++;
-  *slot = steps[(i >= nsteps) ? 0 : ((i + 1) % nsteps)];
-  _beacon_next = futureMillis((uint32_t)(*slot) * 60UL * 1000UL);
+  do {
+    i = (i >= nsteps) ? 1 : (i + 1) % nsteps;
+  } while (steps[i] == 0 && _prefs.beacon_move == 0);
+  *slot = steps[i];
   savePrefs();
   return true;
 }
 
+bool MyMesh::cycleBeaconMove() {
+  _prefs.beacon_move = (uint8_t)((_prefs.beacon_move + 1) % BEACON_MOVE_STEPS);
+  if (_prefs.beacon_move == 0) {   // distance off: the timer must run again
+    if (_prefs.beacon_group_mins == 0) _prefs.beacon_group_mins = 30;
+    if (_prefs.beacon_chat_mins == 0) _prefs.beacon_chat_mins = 30;
+  }
+  savePrefs();
+  return true;
+}
+
+bool MyMesh::beaconIntervalFixed() const {
+  return _prefs.beacon_mode == BEACON_ADVERT_LOCAL || _prefs.beacon_mode == BEACON_ADVERT_FLOOD;
+}
+
+uint32_t MyMesh::beaconMoveMeters() const {
+  return _prefs.beacon_move < BEACON_MOVE_STEPS ? BEACON_MOVE_METERS[_prefs.beacon_move] : 0;
+}
+
+uint32_t MyMesh::beaconMoveGapMs() const {
+  return _prefs.beacon_mode == BEACON_ADVERT_FLOOD ? BEACON_MOVE_GAP_FLOOD_MS : BEACON_MOVE_GAP_MS;
+}
+
+// Short distances: a flat-earth approximation is good to well under 1%.
+uint32_t MyMesh::beaconMovedMeters() const {
+  if (!_beacon_have_pos) return 0;
+  double dlat = (sensors.node_lat - _beacon_lat) * 111320.0;
+  double dlon = (sensors.node_lon - _beacon_lon) * 111320.0 * cos(_beacon_lat * M_PI / 180.0);
+  return (uint32_t)sqrt(dlat * dlat + dlon * dlon);
+}
+
+static void formatMeters(char* buf, size_t n, uint32_t m) {
+  if (m >= 1000) snprintf(buf, n, "%lukm", (unsigned long)(m / 1000));
+  else snprintf(buf, n, "%lum", (unsigned long)m);
+}
+
+void MyMesh::formatBeaconRules(char* every, size_t every_sz, char* moved, size_t moved_sz) {
+  uint32_t iv = beaconIntervalMs();
+  if (iv == 0) snprintf(every, every_sz, "off");
+  else if (iv >= 3600000UL) snprintf(every, every_sz, "%luh", (unsigned long)(iv / 3600000UL));
+  else snprintf(every, every_sz, "%lumin", (unsigned long)(iv / 60000UL));
+  uint32_t mv = beaconMoveMeters();
+  if (mv == 0) snprintf(moved, moved_sz, "off");
+  else formatMeters(moved, moved_sz, mv);
+}
+
+// Sends when the interval has passed or the node moved far enough since the
+// last position sent, whichever comes first. The first send after a target is
+// picked goes out as soon as there is a fix.
 void MyMesh::checkBeacon() {
   if (_prefs.beacon_mode == BEACON_OFF) return;
   if (_beacon_next == 0) _beacon_next = futureMillis(BEACON_FIRST_MS);
@@ -3650,6 +3765,17 @@ void MyMesh::checkBeacon() {
 
   if (!beaconHasFix()) {
     _beacon_next = futureMillis(BEACON_NOFIX_MS);
+    return;
+  }
+
+  unsigned long since = millis() - _beacon_last_ms;
+  uint32_t iv = beaconIntervalMs();
+  uint32_t mv = beaconMoveMeters();
+  bool due = !_beacon_have_pos
+          || (iv > 0 && since >= iv)
+          || (mv > 0 && since >= beaconMoveGapMs() && beaconMovedMeters() >= mv);
+  if (!due) {
+    _beacon_next = futureMillis(BEACON_CHECK_MS);
     return;
   }
 
@@ -3690,7 +3816,11 @@ void MyMesh::checkBeacon() {
 
   if (sent) {
     _beacon_sent_at = now;
-    _beacon_next = futureMillis(beaconIntervalMs());
+    _beacon_last_ms = millis();
+    _beacon_lat = sensors.node_lat;
+    _beacon_lon = sensors.node_lon;
+    _beacon_have_pos = true;
+    _beacon_next = futureMillis(BEACON_CHECK_MS);
   } else {
     _beacon_next = futureMillis(BEACON_RETRY_MS);
   }

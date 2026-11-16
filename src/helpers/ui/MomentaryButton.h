@@ -8,7 +8,8 @@
 #define BUTTON_EVENT_DOUBLE_CLICK 3
 #define BUTTON_EVENT_TRIPLE_CLICK 4
 #define BUTTON_EVENT_QUAD_CLICK   5
-#define BUTTON_EVENT_PENTA_CLICK  6   // five clicks or more
+#define BUTTON_EVENT_PENTA_CLICK  6   // five clicks
+#define BUTTON_EVENT_HEXA_CLICK   7   // six clicks or more
 
 class MomentaryButton {
   int8_t _pin;

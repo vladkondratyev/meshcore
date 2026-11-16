@@ -293,6 +293,23 @@ void ST7789Display::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
   }
 }
 
+// 1-bit MSB-first bitmap at physical pixels, no scaling; runs of set bits go out as one rect.
+void ST7789Display::blit1(int x, int y, int w, int h, const uint8_t* bits) {
+  uint16_t widthInBytes = (w + 7) / 8;
+  for (int by = 0; by < h; by++) {
+    int run = -1;
+    for (int bx = 0; bx <= w; bx++) {
+      bool on = bx < w && (pgm_read_byte(bits + by * widthInBytes + (bx >> 3)) & (0x80 >> (bx & 7)));
+      if (on) {
+        if (run < 0) run = bx;
+      } else if (run >= 0) {
+        display.fillRect(x + run, y + by, bx - run, 1);
+        run = -1;
+      }
+    }
+  }
+}
+
 uint16_t ST7789Display::getTextWidth(const char* str) {
   int px = 0;
   const char* p = str;

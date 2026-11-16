@@ -53,6 +53,8 @@ class UITask : public AbstractUITask {
   UIScreen* home;
   UIScreen* msg_preview;
   UIScreen* clock;
+  UIScreen* charge_clock;   // big clock on the charger (non-e-ink)
+  UIScreen* stopwatch;      // stopwatch and timer: six clicks
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
   UIScreen* compose;   // Write page: message typed on the device
   UIScreen* sent;      // Sent page: what the device sent, to whom, in reply to what
@@ -60,6 +62,10 @@ class UITask : public AbstractUITask {
   SentLog _sent_log;
   UIScreen* curr;
   unsigned long _idle_since;
+  uint32_t _glance_minute = 0;   // big clock on battery: the minute already shown
+
+  bool canSensePower() const;
+  void updateChargeClock();
 
   void userLedHandler();
 
@@ -69,6 +75,7 @@ class UITask : public AbstractUITask {
   char handleDoubleClick(char c);
   char handleTripleClick(char c);
   char handleQuadClick(char c);
+  char handleManyClicks();
 
   void setCurrScreen(UIScreen* c);
 
@@ -79,6 +86,8 @@ public:
     ui_started_at = 0;
     curr = NULL;
     clock = NULL;
+    charge_clock = NULL;
+    stopwatch = NULL;
     reader = NULL;
     compose = NULL;
     sent = NULL;
@@ -97,6 +106,8 @@ public:
   bool inSent() const { return curr != NULL && curr == sent; }
   void openRelays();
   bool inRelays() const { return curr != NULL && curr == relays; }
+  void openStopwatch();
+  bool inStopwatch() const { return curr != NULL && curr == stopwatch; }
   SentLog& sentLog() { return _sent_log; }
   int  getUnreadCount() const;
   bool inCompose() const { return curr != NULL && curr == compose; }
@@ -122,6 +133,7 @@ public:
   }
   bool kbFreqLayout() const { return _node_prefs != NULL && _node_prefs->kb_layout != 0; }
   bool autoCursor() const { return _node_prefs != NULL && _node_prefs->auto_cursor != 0; }
+  bool chargeClockEnabled() const { return _node_prefs != NULL && _node_prefs->charge_clock != 0; }
   bool autoCaps() const { return _node_prefs == NULL || _node_prefs->auto_caps != 0; }
   void keepDisplayAwake();
   void requestRefresh() { _next_refresh = 0; }
@@ -178,6 +190,7 @@ public:
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, bool group) override;
   void notify(UIEventType t = UIEventType::none) override;
   bool onUiAck(const uint8_t* ack, uint8_t* key_out) override;
+  void onUiRetry(uint32_t old_ack, uint32_t new_ack, unsigned long until) override;
   void loop() override;
 
   void shutdown(bool restart = false);

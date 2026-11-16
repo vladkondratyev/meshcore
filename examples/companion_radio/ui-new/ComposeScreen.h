@@ -850,13 +850,17 @@ private:
   void drawResult(DisplayDriver& display) {
     drawTargetTitle(display);
     const char* line = "Send failed";
+    char attempt_line[32];
     if (_sent == 3) {
       line = "Sent to channel";
     } else if (_sent) {
       switch (the_mesh.uiAckState()) {
         case MyMesh::UI_ACK_OK:   line = "Delivered"; break;
         case MyMesh::UI_ACK_LOST: line = "No reply"; break;
-        default: line = _sent == 2 ? "Sent (flood)..." : "Sent (direct)...";
+        default:
+          snprintf(attempt_line, sizeof(attempt_line), "Try %d/%d (%s)...", the_mesh.uiAttempt(), UI_SEND_ATTEMPTS,
+                   the_mesh.uiAttempt() == 1 ? "flood" : "retry");
+          line = attempt_line;
       }
     }
     display.setTextSize(1);

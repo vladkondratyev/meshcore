@@ -655,6 +655,14 @@ void ST7735Display::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
   sprite->drawBitmap(x*SCALE_X, y*SCALE_Y, bits, w, h, curr_color);
 }
 
+void ST7735Display::fillRectPx(int x, int y, int w, int h) {
+  sprite->fillRect(x, y, w, h, curr_color);
+}
+
+void ST7735Display::blit1(int x, int y, int w, int h, const uint8_t* bits) {
+  sprite->drawBitmap(x, y, bits, w, h, curr_color);
+}
+
 uint16_t ST7735Display::getTextWidth(const char* str) {
 #ifdef HELTEC_T096
   if (pix_num != pix_div) return cyrWidth(str) / SCALE_X;

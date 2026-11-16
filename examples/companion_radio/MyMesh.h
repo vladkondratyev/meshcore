@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef UI_SEND_ATTEMPTS
+  #define UI_SEND_ATTEMPTS 3   // tries for a direct message written on the device
+#endif
+
 #include <Arduino.h>
 #include <Mesh.h>
 #include "AbstractUITask.h"
@@ -112,7 +116,11 @@ public:
 #if ENV_INCLUDE_GPS == 1
   void cycleBeacon();
   bool cycleBeaconInterval();
+  bool cycleBeaconMove();     // distance trigger: off, 50 m, 100 m ... 2 km
   bool stopBeacon();
+  // "30min" / "off" / "10min" (adverts: fixed), and "200m" / "1km" / "off"
+  void formatBeaconRules(char* every, size_t every_sz, char* moved, size_t moved_sz);
+  bool beaconIntervalFixed() const;   // adverts keep their own period
   void formatBeacon(char* mode, size_t mode_sz, char* target, size_t target_sz, char* pos, size_t pos_sz, char* sent, size_t sent_sz);
 #endif
   bool sendNeighborDiscover();
@@ -126,6 +134,7 @@ public:
   // Messages written on the device itself (Write page)
   enum { UI_ACK_NONE = 0, UI_ACK_WAIT, UI_ACK_OK, UI_ACK_LOST };
   int  uiSendDirect(const uint8_t* pub_prefix, const char* text);  // 0 failed, 1 direct, 2 flood
+  uint8_t uiAttempt() const { return _ui_try + 1; }   // 1..UI_SEND_ATTEMPTS
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
   // Write page phrases: the console replaces any of them (set phrase N text)
@@ -239,6 +248,15 @@ private:
   unsigned long _ui_ack_until = 0;
   bool _ui_ack_ok = false;
   ContactInfo* _ui_ack_contact = NULL;
+  // a direct message from the device UI goes out up to UI_SEND_ATTEMPTS times:
+  // the first by flood, the rest direct once a path is known (flood otherwise)
+  uint8_t _ui_try = 0;                         // attempt now in the air, 0-based
+  uint8_t _ui_try_key[6];                      // recipient prefix: the contact is looked up again each time
+  uint32_t _ui_try_ts = 0;                     // same timestamp on every attempt, so the receiver sees one message
+  uint32_t _ui_try_acks[UI_SEND_ATTEMPTS];     // a late ack of an earlier attempt still counts
+  char _ui_try_text[MAX_TEXT_LEN + 1];
+  int  uiSendAttempt();
+  void uiRetryCheck();
 
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
@@ -344,8 +362,14 @@ private:
   void putNeighbor(const uint8_t* pubkey, int8_t snr_x4);
 
 #if ENV_INCLUDE_GPS == 1
-  unsigned long _beacon_next;
-  uint32_t _beacon_sent_at;
+  unsigned long _beacon_next;       // next check
+  uint32_t _beacon_sent_at;         // RTC time of the last send, for "sent 5m ago"
+  unsigned long _beacon_last_ms = 0;   // millis() of the last send
+  bool _beacon_have_pos = false;    // _beacon_lat/_lon hold the last position sent
+  double _beacon_lat = 0, _beacon_lon = 0;
+  uint32_t beaconMoveMeters() const;
+  uint32_t beaconMoveGapMs() const;
+  uint32_t beaconMovedMeters() const;   // from the last position sent
   struct BeaconOpt {
     uint8_t mode;
     uint8_t chan;

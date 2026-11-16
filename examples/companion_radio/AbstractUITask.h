@@ -47,5 +47,7 @@ public:
   virtual void notify(UIEventType t = UIEventType::none) = 0;
   // an ack for a message sent from the device UI; key_out gets the contact prefix (6 bytes)
   virtual bool onUiAck(const uint8_t* ack, uint8_t* key_out) { return false; }
+  // a message from the device UI went out again: its ack and deadline changed
+  virtual void onUiRetry(uint32_t old_ack, uint32_t new_ack, unsigned long until) {}
   virtual void loop() = 0;
 };

@@ -46,6 +46,11 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  // the panel is 160x80; the UI grid is 128x64 scaled by 1.25
+  int frameWidth() override { return 160; }
+  int frameHeight() override { return 80; }
+  void fillRectPx(int x, int y, int w, int h) override;
+  void blit1(int x, int y, int w, int h, const uint8_t* bits) override;
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
 
