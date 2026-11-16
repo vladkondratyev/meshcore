@@ -72,6 +72,9 @@ public:
   uint32_t getPacketsRecvErrors() const { return n_recv_errors; }
   uint32_t getPacketsSent() const { return n_sent; }
   void resetStats() { n_recv = n_sent = n_recv_errors = 0; }
+  // the radio raised "packet done" again before the last one was read: that packet is lost
+  static uint32_t getIrqOverruns();
+  static void resetIrqOverruns();
 
   virtual float getLastRSSI() const override;
   virtual float getLastSNR() const override;

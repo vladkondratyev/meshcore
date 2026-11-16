@@ -251,16 +251,22 @@ void setup() {
 }
 
 void loop() {
+  unsigned long t0 = millis();
   the_mesh.loop();
   interface_manager.loop();
   sensors.loop();
 #ifdef DISPLAY_CLASS
+  unsigned long t_ui = millis();
   ui_task.loop();
+  t_ui = millis() - t_ui;
+#else
+  unsigned long t_ui = 0;
 #endif
   rtc_clock.tick();
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();
 #endif
+  the_mesh.noteLoop(millis() - t0, t_ui);   // "stats": work time per pass, sleep not counted
 
   if (!the_mesh.hasPendingWork()) {
 #if defined(NRF52_PLATFORM)

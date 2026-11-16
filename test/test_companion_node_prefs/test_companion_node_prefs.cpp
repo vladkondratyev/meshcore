@@ -77,6 +77,31 @@ TEST(CompanionNodePrefs, RxGainSettingsRoundTripIndependently) {
 }
 #endif
 
+// Settings added by this fork: big clock and the beacon distance trigger,
+// with a beacon interval of 0 (distance only), survive a save and a load.
+TEST(CompanionNodePrefs, BigClockAndBeaconMoveRoundTrip) {
+  NodePrefs saved;
+  saved.charge_clock = 1;
+  saved.beacon_move = 3;          // 200 m
+  saved.beacon_group_mins = 0;    // time off, distance only
+  saved.beacon_chat_mins = 15;
+
+  CaptureStream output;
+  ASSERT_TRUE(saved.saveSerial(output));
+  EXPECT_NE(std::string::npos, output.text().find("chclk:1"));
+  EXPECT_NE(std::string::npos, output.text().find("bcn_mv:3"));
+
+  ReplayStream input(output.text().c_str());
+  NodePrefs loaded;
+  ASSERT_EQ(0, loaded.charge_clock);   // defaults before the load
+  ASSERT_EQ(0, loaded.beacon_move);
+  ASSERT_TRUE(loaded.loadSerial(input));
+  EXPECT_EQ(1, loaded.charge_clock);
+  EXPECT_EQ(3, loaded.beacon_move);
+  EXPECT_EQ(0, loaded.beacon_group_mins);
+  EXPECT_EQ(15, loaded.beacon_chat_mins);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

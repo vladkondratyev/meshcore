@@ -57,6 +57,7 @@ static bool irqPinValid(uint32_t pin) {
 #define SAMPLING_THRESHOLD  14
 
 static volatile uint8_t state = STATE_IDLE;
+static volatile uint32_t irq_overruns = 0;   // a packet arrived while the previous one was still unread
 
 // this function is called when a complete packet
 // is transmitted by the module
@@ -66,8 +67,12 @@ static
 #endif
 void setFlag(void) {
   // we sent a packet, set the flag
+  if (state & STATE_INT_READY) irq_overruns++;
   state |= STATE_INT_READY;
 }
+
+uint32_t RadioLibWrapper::getIrqOverruns() { return irq_overruns; }
+void RadioLibWrapper::resetIrqOverruns() { irq_overruns = 0; }
 
 void RadioLibWrapper::begin() {
   _radio->setPacketReceivedAction(setFlag);  // this is also SentComplete interrupt

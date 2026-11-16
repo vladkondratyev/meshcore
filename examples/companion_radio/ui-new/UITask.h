@@ -55,6 +55,8 @@ class UITask : public AbstractUITask {
   UIScreen* clock;
   UIScreen* charge_clock;   // big clock on the charger (non-e-ink)
   UIScreen* stopwatch;      // stopwatch and timer: six clicks
+  UIScreen* games;          // Games page: Runner, Tower, Snake
+  UIScreen* sos;            // SOS: 5 s hold
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
   UIScreen* compose;   // Write page: message typed on the device
   UIScreen* sent;      // Sent page: what the device sent, to whom, in reply to what
@@ -88,6 +90,8 @@ public:
     clock = NULL;
     charge_clock = NULL;
     stopwatch = NULL;
+    games = NULL;
+    sos = NULL;
     reader = NULL;
     compose = NULL;
     sent = NULL;
@@ -108,6 +112,9 @@ public:
   bool inRelays() const { return curr != NULL && curr == relays; }
   void openStopwatch();
   bool inStopwatch() const { return curr != NULL && curr == stopwatch; }
+  void openGames();
+  bool inGames() const { return curr != NULL && curr == games; }
+  bool inSos() const { return curr != NULL && curr == sos; }
   SentLog& sentLog() { return _sent_log; }
   int  getUnreadCount() const;
   bool inCompose() const { return curr != NULL && curr == compose; }

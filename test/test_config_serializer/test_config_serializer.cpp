@@ -28,7 +28,7 @@ public:
 
 class MockPrintStream : public Stream {
     int len = 0;
-    uint8_t _buf[1024];
+    uint8_t _buf[8192];   // the repeater prefs of this fork are past 1 KB
 
     size_t printSigned(long long value) {
         char text[24];

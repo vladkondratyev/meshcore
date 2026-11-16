@@ -19,3 +19,4 @@ venv/
 platformio.local.ini
 __pycache__/
 *.pyc
+release-out/

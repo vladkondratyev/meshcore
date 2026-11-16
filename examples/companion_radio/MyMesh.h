@@ -121,6 +121,8 @@ public:
   // "30min" / "off" / "10min" (adverts: fixed), and "200m" / "1km" / "off"
   void formatBeaconRules(char* every, size_t every_sz, char* moved, size_t moved_sz);
   bool beaconIntervalFixed() const;   // adverts keep their own period
+  void beaconStatus(Print& out);      // console: "beacon"
+  const char* beaconCommand(const char* arg);   // console: "set beacon ..."; NULL or an error
   void formatBeacon(char* mode, size_t mode_sz, char* target, size_t target_sz, char* pos, size_t pos_sz, char* sent, size_t sent_sz);
 #endif
   bool sendNeighborDiscover();
@@ -135,6 +137,14 @@ public:
   enum { UI_ACK_NONE = 0, UI_ACK_WAIT, UI_ACK_OK, UI_ACK_LOST };
   int  uiSendDirect(const uint8_t* pub_prefix, const char* text);  // 0 failed, 1 direct, 2 flood
   uint8_t uiAttempt() const { return _ui_try + 1; }   // 1..UI_SEND_ATTEMPTS
+  // SOS: "SOS! geo:..." to the SOS channel and every favourite, again every
+  // SOS_REPEAT_MS until stopped; stopping sends "SOS: all clear" once
+  void sosStart();
+  void sosStop();
+  bool sosActive() const { return _sos_on; }
+  uint16_t sosRounds() const { return _sos_rounds; }
+  uint32_t sosNextSecs() const;
+  void sosTargets(char* buf, size_t n);
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
   // Write page phrases: the console replaces any of them (set phrase N text)
@@ -143,6 +153,9 @@ public:
   void setUiPhrase(int i, const char* text);
   // own position as "geo:lat,lon" for the Write page; false without a GPS fix
   bool uiMyPosition(char* buf, size_t n);
+  // "geo:lat,lon" anywhere in text: how far and which way from here.
+  // false without "geo:" or without an own GPS fix.
+  bool uiGeoFromHere(const char* text, uint32_t& meters, int& bearing_deg);
   // smart switches (Relays.h): the Relays page, `relay ...` commands, mesh texts
   RelayManager relays;
   void relayReply(const uint8_t* key, const char* text);   // a direct message back to a contact
@@ -239,11 +252,26 @@ public:
   }
 #endif
 
+  // console "stats": how long one pass of the main loop works (sleep excluded)
+  void noteLoop(unsigned long ms, unsigned long ui_ms) {
+    if (ms > _loop_max) _loop_max = ms;
+    if (ui_ms > _loop_ui_max) _loop_ui_max = ui_ms;
+    if (ms >= 100) _loop_slow++;
+    _loop_n++;
+  }
+
   // To check if there is pending work
   bool hasPendingWork() const;
 
 private:
   char _phrase_ovr[UI_PHRASE_COUNT][UI_PHRASE_LEN];   // "" = the stock phrase
+  bool _sos_on = false;
+  uint16_t _sos_rounds = 0;
+  unsigned long _sos_next = 0;
+  void sosSend(bool all_clear);
+  void checkSos();
+  unsigned long _loop_max = 0, _loop_ui_max = 0, _loop_since = 0;
+  uint32_t _loop_slow = 0, _loop_n = 0;
   uint32_t _ui_ack = 0;              // ack hash of the last message sent from the device UI
   unsigned long _ui_ack_until = 0;
   bool _ui_ack_ok = false;
@@ -370,6 +398,15 @@ private:
   uint32_t beaconMoveMeters() const;
   uint32_t beaconMoveGapMs() const;
   uint32_t beaconMovedMeters() const;   // from the last position sent
+  // Beacon to a contact: up to 3 tries with an ack, like a message from the device
+  int8_t _bcn_try = -1;              // attempt in the air, -1 = none
+  bool _bcn_ok = false;              // the last beacon was confirmed
+  uint32_t _bcn_ts = 0;
+  uint32_t _bcn_acks[3];
+  unsigned long _bcn_until = 0;
+  char _bcn_text[48];
+  bool beaconChatAttempt();
+  void beaconRetryCheck();
   struct BeaconOpt {
     uint8_t mode;
     uint8_t chan;

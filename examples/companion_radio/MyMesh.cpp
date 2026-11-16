@@ -359,6 +359,98 @@ bool MyMesh::uiMyPosition(char* buf, size_t n) {
 #endif
 }
 
+#ifndef SOS_REPEAT_MS
+  #define SOS_REPEAT_MS (2UL * 60UL * 1000UL)
+#endif
+
+void MyMesh::sosStart() {
+  _sos_on = true;
+  _sos_rounds = 0;
+  _sos_next = 0;   // first round right away
+#if ENV_INCLUDE_GPS == 1
+  if (!_prefs.gps_enabled) {   // the next rounds carry the position
+    _prefs.gps_enabled = 1;
+    sensors.setSettingValue("gps", "1");
+    savePrefs();
+  }
+#endif
+}
+
+void MyMesh::sosStop() {
+  if (!_sos_on) return;
+  _sos_on = false;
+  if (_sos_rounds > 0) sosSend(true);
+}
+
+uint32_t MyMesh::sosNextSecs() const {
+  if (!_sos_on) return 0;
+  long left = (long)(_sos_next - millis());
+  return left > 0 ? (uint32_t)(left / 1000) : 0;
+}
+
+void MyMesh::sosTargets(char* buf, size_t n) {
+  int favs = 0;
+  int total = getTotalContactSlots();
+  for (int i = 0; i < total; i++) {
+    ContactInfo c;
+    if (getContactByIdx((uint32_t)i, c) && c.type == ADV_TYPE_CHAT && (c.flags & 0x01)) favs++;
+  }
+  ChannelDetails ch;
+  const char* chan = (getChannel(_prefs.sos_chan, ch) && ch.name[0]) ? ch.name : "-";
+  snprintf(buf, n, "%s +%d", chan, favs);
+}
+
+void MyMesh::sosSend(bool all_clear) {
+  bool ru = _prefs.ui_lang != UI_LANG_EN;
+  char text[80];
+  char pos[40] = "";
+  uiMyPosition(pos, sizeof(pos));   // stays "" without a fix
+  if (all_clear) snprintf(text, sizeof(text), "%s %s", ru ? "SOS: отбой, всё в порядке." : "SOS: all clear.", pos);
+  else snprintf(text, sizeof(text), "%s %s", ru ? "SOS! Нужна помощь." : "SOS! Need help.", pos[0] ? pos : (ru ? "(нет GPS)" : "(no GPS)"));
+  uint32_t ts = getRTCClock()->getCurrentTimeUnique();
+  ChannelDetails ch;
+  if (getChannel(_prefs.sos_chan, ch) && ch.name[0]) sendGroupMessage(ts, ch.channel, _prefs.node_name, text, strlen(text));
+  int total = getTotalContactSlots();
+  for (int i = 0; i < total; i++) {
+    ContactInfo c;
+    if (!getContactByIdx((uint32_t)i, c) || c.type != ADV_TYPE_CHAT || (c.flags & 0x01) == 0) continue;
+    ContactInfo* rc = lookupContactByPubKey(c.id.pub_key, PUB_KEY_SIZE);
+    if (rc == NULL) continue;
+    uint32_t ack = 0, est = 0;
+    sendMessage(*rc, getRTCClock()->getCurrentTimeUnique(), 0, text, ack, est);
+  }
+}
+
+void MyMesh::checkSos() {
+  if (!_sos_on || (_sos_next != 0 && !millisHasNowPassed(_sos_next))) return;
+  sosSend(false);
+  _sos_rounds++;
+  _sos_next = futureMillis(SOS_REPEAT_MS);
+}
+
+bool MyMesh::uiGeoFromHere(const char* text, uint32_t& meters, int& bearing_deg) {
+#if ENV_INCLUDE_GPS == 1
+  const char* g = strstr(text, "geo:");
+  if (g == NULL || !_prefs.gps_enabled || !beaconHasFix()) return false;
+  char* end = NULL;
+  double lat2 = strtod(g + 4, &end);
+  if (end == g + 4 || *end != ',') return false;
+  const char* lon_s = end + 1;
+  double lon2 = strtod(lon_s, &end);
+  if (end == lon_s || lat2 < -90 || lat2 > 90 || lon2 < -180 || lon2 > 180) return false;
+  const double R = 6371000.0, D = M_PI / 180.0;
+  double p1 = sensors.node_lat * D, p2 = lat2 * D, dl = (lon2 - sensors.node_lon) * D;
+  double a = sin((p2 - p1) / 2) * sin((p2 - p1) / 2) + cos(p1) * cos(p2) * sin(dl / 2) * sin(dl / 2);
+  meters = (uint32_t)(2 * R * atan2(sqrt(a), sqrt(1 - a)));
+  double b = atan2(sin(dl) * cos(p2), cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl)) / D;
+  bearing_deg = ((int)lround(b) + 360) % 360;
+  return true;
+#else
+  (void)text; (void)meters; (void)bearing_deg;
+  return false;
+#endif
+}
+
 const char* MyMesh::uiPhrase(int i) const {
   if (i < 0 || i >= UI_PHRASE_COUNT) return "";
   if (_phrase_ovr[i][0]) return _phrase_ovr[i];
@@ -638,6 +730,17 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
+#if ENV_INCLUDE_GPS == 1
+  if (_bcn_try >= 0 && !_bcn_ok) {   // a beacon to a contact: any of its tries
+    for (int i = 0; i <= _bcn_try && i < 3; i++) {
+      if (_bcn_acks[i] != 0 && memcmp(data, &_bcn_acks[i], 4) == 0) {
+        _bcn_ok = true;
+        _bcn_try = -1;
+        return lookupContactByPubKey(_prefs.beacon_pub, PUB_KEY_SIZE);
+      }
+    }
+  }
+#endif
   bool ui_hit = false;   // a message sent from the device UI: any of its attempts
   if (_ui_ack != 0) {
     for (int i = 0; i <= _ui_try && i < UI_SEND_ATTEMPTS; i++) {
@@ -1380,6 +1483,7 @@ void MyMesh::begin(bool has_display) {
 #ifdef MAX_GROUP_CHANNELS
   if (MAX_GROUP_CHANNELS > 0) {
     _prefs.beacon_chan = constrain(_prefs.beacon_chan, 0, MAX_GROUP_CHANNELS - 1);
+    _prefs.sos_chan = constrain(_prefs.sos_chan, 0, MAX_GROUP_CHANNELS - 1);
   }
 #endif
 
@@ -2715,7 +2819,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set kb std|freq, set caps on|off, set cursor on|off, relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -2904,6 +3008,79 @@ void MyMesh::runCLICommand(char* command, Print& out) {
       } else {
         out.print("  relay scan|found|add|del|mesh|allow|deny|N on|off\n");
       }
+    } else if (strcmp(command, "sos") == 0 || strcmp(command, "sos stop") == 0) {
+      // sos: status; sos stop: stop and send "all clear". It is started on the device (hold 5 s).
+      if (command[3] == ' ') sosStop();
+      char who[48];
+      sosTargets(who, sizeof(who));
+      if (_sos_on) snprintf(line, sizeof(line), "  > SOS on, %u sent, next in %lus, to %s\n", _sos_rounds, (unsigned long)sosNextSecs(), who);
+      else snprintf(line, sizeof(line), "  > SOS off, goes to %s (channel + favourites)\n", who);
+      out.print(line);
+    } else if (memcmp(command, "set sos ", 8) == 0) {
+      const char* name = command + 8;
+      while (*name == ' ') name++;
+      bool found = false;
+#ifdef MAX_GROUP_CHANNELS
+      for (int i = 0; i < MAX_GROUP_CHANNELS && !found; i++) {
+        ChannelDetails ch;
+        if (!getChannel(i, ch) || ch.name[0] == 0) continue;
+        const char* a = ch.name[0] == '#' ? ch.name + 1 : ch.name;
+        const char* b = name[0] == '#' ? name + 1 : name;
+        if (strcasecmp(a, b) == 0) { _prefs.sos_chan = (uint8_t)i; found = true; }
+      }
+#endif
+      if (found) { savePrefs(); snprintf(line, sizeof(line), "  > SOS channel %s\n", name); }
+      else snprintf(line, sizeof(line), "  Error: no such channel\n");
+      out.print(line);
+    } else if (strcmp(command, "stats") == 0 || strcmp(command, "stats reset") == 0) {
+      // main loop work time and lost packets: does the screen (running line,
+      // games, clock) keep the radio waiting?
+      if (command[5] == ' ') {
+        _loop_max = _loop_ui_max = 0;
+        _loop_slow = _loop_n = 0;
+        _loop_since = millis();
+        radio_driver.resetStats();
+        RadioLibWrapper::resetIrqOverruns();
+        out.print("  > stats reset\n");
+      } else {
+        unsigned long secs = (millis() - _loop_since) / 1000UL;
+        snprintf(line, sizeof(line), "  > loop max %lu ms (screen %lu ms), >=100 ms: %lu of %lu, over %lus\n",
+                 _loop_max, _loop_ui_max, (unsigned long)_loop_slow, (unsigned long)_loop_n, secs);
+        out.print(line);
+        snprintf(line, sizeof(line), "  > rx %lu, rx errors %lu, lost (overrun) %lu, tx %lu\n",
+                 (unsigned long)radio_driver.getPacketsRecv(), (unsigned long)radio_driver.getPacketsRecvErrors(),
+                 (unsigned long)RadioLibWrapper::getIrqOverruns(), (unsigned long)radio_driver.getPacketsSent());
+        out.print(line);
+      }
+    } else if (memcmp(command, "set bigclock", 12) == 0 && (command[12] == 0 || command[12] == ' ')) {
+      // set bigclock on|off: big clock instead of a dark screen (on the charger where it can be sensed)
+      const char* arg = &command[12];
+      while (*arg == ' ') arg++;
+      if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+        _prefs.charge_clock = strcmp(arg, "on") == 0 ? 1 : 0;
+        savePrefs();
+        snprintf(line, sizeof(line), "  > bigclock is %s\n", arg);
+      } else if (*arg) {
+        snprintf(line, sizeof(line), "  Error: set bigclock on|off\n");
+      } else {
+        snprintf(line, sizeof(line), "  > bigclock is %s\n", _prefs.charge_clock ? "on" : "off");
+      }
+      out.print(line);
+#if ENV_INCLUDE_GPS == 1
+    } else if (strcmp(command, "beacon") == 0) {
+      beaconStatus(out);
+    } else if (memcmp(command, "set beacon", 10) == 0 && (command[10] == 0 || command[10] == ' ')) {
+      // set beacon to NAME|#channel|neighbors|flood, every MIN, move METERS, off
+      const char* arg = &command[10];
+      while (*arg == ' ') arg++;
+      const char* err = beaconCommand(arg);
+      if (err) {
+        snprintf(line, sizeof(line), "  Error: %s\n", err);
+        out.print(line);
+      } else {
+        beaconStatus(out);
+      }
+#endif
     } else if (memcmp(command, "set cursor", 10) == 0 && (command[10] == 0 || command[10] == ' ')) {
       // set cursor on|off: the keyboard cursor jumps to the likely next letter
       const char* arg = &command[10];
@@ -3447,6 +3624,10 @@ bool MyMesh::pullClock() {
 void MyMesh::loop() {
   BaseChatMesh::loop();
   uiRetryCheck();
+  checkSos();
+#if ENV_INCLUDE_GPS == 1
+  beaconRetryCheck();
+#endif
 
   {   // a relay switched (or failed): tell whoever asked by a mesh text
     int idx; bool ok, scan, reply; uint8_t key[6];
@@ -3629,7 +3810,11 @@ void MyMesh::formatBeacon(char* mode, size_t mode_sz, char* target, size_t targe
     uint32_t secs = (now >= _beacon_sent_at) ? (now - _beacon_sent_at) : 0;
     char age[8];
     formatBeaconAge(age, sizeof(age), secs);
-    snprintf(sent, sent_sz, "sent %s ago", age);
+    const char* ack = "";
+    if (_prefs.beacon_mode == BEACON_CHAT) {
+      ack = _bcn_ok ? " ok" : (_bcn_try >= 0 ? " ..." : " no reply");
+    }
+    snprintf(sent, sent_sz, "sent %s ago%s", age, ack);
   } else if (_prefs.beacon_mode == BEACON_OFF) {
     beaconCopy(sent, sent_sz, "");
   } else {
@@ -3720,6 +3905,96 @@ bool MyMesh::cycleBeaconMove() {
   return true;
 }
 
+void MyMesh::beaconStatus(Print& out) {
+  char mode[20], target[32], pos[40], sent[24], every[12], moved[12], line[96];
+  formatBeacon(mode, sizeof(mode), target, sizeof(target), pos, sizeof(pos), sent, sizeof(sent));
+  formatBeaconRules(every, sizeof(every), moved, sizeof(moved));
+  if (_prefs.beacon_mode == BEACON_OFF) {
+    out.print("  > beacon off\n");
+    return;
+  }
+  const char* sp = strchr(mode, ' ');
+  int klen = sp ? (int)(sp - mode) : (int)strlen(mode);
+  snprintf(line, sizeof(line), "  > beacon %.*s %s, every %s%s, move %s\n", klen, mode, target, every,
+           beaconIntervalFixed() ? " (fixed)" : "", moved);
+  out.print(line);
+  snprintf(line, sizeof(line), "  > %s, %s\n", pos[0] ? pos : "-", sent[0] ? sent : "-");
+  out.print(line);
+}
+
+// Console form of the Beacon settings. Returns NULL or an error to print.
+const char* MyMesh::beaconCommand(const char* arg) {
+  if (strcmp(arg, "off") == 0) {
+    stopBeacon();
+    return NULL;
+  }
+  if (memcmp(arg, "to ", 3) == 0) {
+    const char* name = arg + 3;
+    while (*name == ' ') name++;
+    uint8_t mode = BEACON_OFF, chan = 0;
+    ContactInfo* contact = NULL;
+    if (strcmp(name, "neighbors") == 0) {
+      mode = BEACON_ADVERT_LOCAL;
+    } else if (strcmp(name, "flood") == 0) {
+      mode = BEACON_ADVERT_FLOOD;
+    } else {
+#ifdef MAX_GROUP_CHANNELS
+      for (int i = 0; i < MAX_GROUP_CHANNELS && mode == BEACON_OFF; i++) {
+        ChannelDetails ch;
+        if (!getChannel(i, ch) || ch.name[0] == 0) continue;
+        const char* a = ch.name[0] == '#' ? ch.name + 1 : ch.name;
+        const char* b = name[0] == '#' ? name + 1 : name;
+        if (strcasecmp(a, b) == 0) { mode = BEACON_GROUP; chan = (uint8_t)i; }
+      }
+#endif
+      if (mode == BEACON_OFF && name[0] != '#') {
+        contact = searchContactsByPrefix(name);
+        if (contact && contact->type == ADV_TYPE_CHAT) mode = BEACON_CHAT;
+      }
+    }
+    if (mode == BEACON_OFF) return "no such channel or contact";
+    _prefs.beacon_mode = mode;
+    if (mode == BEACON_GROUP) _prefs.beacon_chan = chan;
+    if (mode == BEACON_CHAT) memcpy(_prefs.beacon_pub, contact->id.pub_key, PUB_KEY_SIZE);
+    _prefs.gps_enabled = 1;
+    sensors.setSettingValue("gps", "1");
+    _beacon_have_pos = false;
+    _beacon_next = futureMillis(BEACON_FIRST_MS);
+    savePrefs();
+    return NULL;
+  }
+  if (memcmp(arg, "every ", 6) == 0) {
+    const char* v = arg + 6;
+    while (*v == ' ') v++;
+    int mins = strcmp(v, "off") == 0 ? 0 : atoi(v);
+    if (mins != 0 && (mins < 5 || mins > 180)) return "every off|5..180 (minutes)";
+    if (mins == 0 && _prefs.beacon_move == 0) return "set beacon move first, or the beacon never sends";
+    if (beaconIntervalFixed() || _prefs.beacon_mode == BEACON_OFF) return "adverts keep a fixed time";
+    if (_prefs.beacon_mode == BEACON_GROUP) _prefs.beacon_group_mins = (uint8_t)mins;
+    else _prefs.beacon_chat_mins = (uint8_t)mins;
+    savePrefs();
+    return NULL;
+  }
+  if (memcmp(arg, "move ", 5) == 0) {
+    const char* v = arg + 5;
+    while (*v == ' ') v++;
+    int m = strcmp(v, "off") == 0 ? 0 : atoi(v);
+    if (strstr(v, "km")) m *= 1000;
+    for (uint8_t i = 0; i < BEACON_MOVE_STEPS; i++) {
+      if (BEACON_MOVE_METERS[i] != m) continue;
+      _prefs.beacon_move = i;
+      if (i == 0) {
+        if (_prefs.beacon_group_mins == 0) _prefs.beacon_group_mins = 30;
+        if (_prefs.beacon_chat_mins == 0) _prefs.beacon_chat_mins = 30;
+      }
+      savePrefs();
+      return NULL;
+    }
+    return "move off|50|100|200|500|1km|2km";
+  }
+  return "set beacon to NAME|#channel|neighbors|flood, every off|MIN, move off|METERS, off";
+}
+
 bool MyMesh::beaconIntervalFixed() const {
   return _prefs.beacon_mode == BEACON_ADVERT_LOCAL || _prefs.beacon_mode == BEACON_ADVERT_FLOOD;
 }
@@ -3753,6 +4028,36 @@ void MyMesh::formatBeaconRules(char* every, size_t every_sz, char* moved, size_t
   uint32_t mv = beaconMoveMeters();
   if (mv == 0) snprintf(moved, moved_sz, "off");
   else formatMeters(moved, moved_sz, mv);
+}
+
+// One try of the beacon to a contact. Tries 1 and 2 use the known path (a
+// periodic beacon should not flood the mesh), the last one floods in case
+// the path broke. The same timestamp: the receiver shows one message.
+bool MyMesh::beaconChatAttempt() {
+  ContactInfo* c = lookupContactByPubKey(_prefs.beacon_pub, PUB_KEY_SIZE);
+  if (c == NULL || c->type != ADV_TYPE_CHAT || _bcn_try < 0 || _bcn_try > 2) return false;
+  uint32_t ack = 0;
+  mesh::Packet* pkt = composeMsgPacket(*c, _bcn_ts, (uint8_t)_bcn_try, _bcn_text, ack);
+  if (pkt == NULL) return false;
+  uint32_t airtime = _radio->getEstAirtimeFor(pkt->getRawLength());
+  uint32_t timeout;
+  if (_bcn_try == 2 || c->out_path_len == OUT_PATH_UNKNOWN) {
+    sendFloodScoped(*c, pkt);
+    timeout = calcFloodTimeoutMillisFor(airtime);
+  } else {
+    sendDirect(pkt, c->out_path, c->out_path_len);
+    timeout = calcDirectTimeoutMillisFor(airtime, c->out_path_len);
+  }
+  _bcn_acks[_bcn_try] = ack;
+  _bcn_until = futureMillis(timeout + 2000);
+  return true;
+}
+
+void MyMesh::beaconRetryCheck() {
+  if (_bcn_try < 0 || _bcn_ok || !millisHasNowPassed(_bcn_until)) return;
+  if (_bcn_try >= 2) { _bcn_try = -1; return; }   // three tries without an ack: "no reply"
+  _bcn_try++;
+  if (!beaconChatAttempt()) _bcn_try = -1;
 }
 
 // Sends when the interval has passed or the node moved far enough since the
@@ -3806,12 +4111,13 @@ void MyMesh::checkBeacon() {
       _beacon_next = futureMillis(BEACON_RETRY_MS);
       return;
     }
-    ContactInfo* c = lookupContactByPubKey(_prefs.beacon_pub, PUB_KEY_SIZE);
-    if (c && c->type == ADV_TYPE_CHAT) {
-      uint32_t ack = 0, est = 0;
-      int rc = sendMessage(*c, now, 0, text, ack, est);
-      sent = (rc == MSG_SEND_SENT_FLOOD || rc == MSG_SEND_SENT_DIRECT);
-    }
+    strcpy(_bcn_text, text);
+    _bcn_ts = now;
+    _bcn_try = 0;
+    _bcn_ok = false;
+    memset(_bcn_acks, 0, sizeof(_bcn_acks));
+    sent = beaconChatAttempt();
+    if (!sent) _bcn_try = -1;
   }
 
   if (sent) {
