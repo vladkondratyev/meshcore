@@ -1,7 +1,7 @@
 #include "UITask.h"
 
 #ifndef UI_AUTHOR
-  #define UI_AUTHOR "Termin36"
+  #define UI_AUTHOR "R3XED"
 #endif
 #include "target.h"
 #include "MyMesh.h"

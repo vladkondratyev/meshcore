@@ -25,7 +25,7 @@
 #define LONG_PRESS_MILLIS   1200
 
 #ifndef UI_AUTHOR
-  #define UI_AUTHOR "Termin36"
+  #define UI_AUTHOR "R3XED"
 #endif
 
 #ifndef UI_RECENT_LIST_SIZE
