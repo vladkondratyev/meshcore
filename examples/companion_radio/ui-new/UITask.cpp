@@ -93,6 +93,69 @@
     #define TICKER_PASSES   1     // how many times a new message runs across the screen
   #endif
   #define TICKER_MAX_COLS  ((MAX_TEXT_LEN + 2) * 6)
+  #define BADGE_MAX_COLS   (UI_BADGE_LEN * 6)
+
+static const TickerGlyph* tickerGlyph(uint32_t cp) {
+  if (cp >= 'a' && cp <= 'z') cp -= 0x20;
+  else if (cp >= 0x430 && cp <= 0x44F) cp -= 0x20;   // а..я -> А..Я
+  else if (cp == 0x451) cp = 0x401;                  // ё -> Ё
+  for (int i = 0; i < TICKER_GLYPH_COUNT; i++) {
+    if (TICKER_GLYPHS[i].cp == cp) return &TICKER_GLYPHS[i];
+  }
+  return NULL;
+}
+
+// text -> dot columns (bit 0 = top row), one dot between letters, three per
+// blank; the trailing gap is dropped. Returns the number of columns.
+static int tickerBuild(const char* text, uint8_t* cols, int max_cols) {
+  int len = 0;
+  bool gap = true;   // swallow leading and repeated blanks
+  for (const char* s = text; *s && len < max_cols - 6; ) {
+    uint32_t cp = 0;
+    s = utf8Next(s, cp);
+    const TickerGlyph* gl = tickerGlyph(cp);
+    if (!gl) {            // space, emoji, anything without a glyph -> one blank
+      if (!gap) { for (int i = 0; i < 3; i++) cols[len++] = 0; gap = true; }
+      continue;
+    }
+    for (int i = 0; i < gl->w; i++) cols[len++] = gl->cols[i];
+    cols[len++] = 0;   // one dot between letters
+    gap = false;
+  }
+  while (len > 0 && cols[len - 1] == 0) len--;
+  return len;
+}
+
+// digits of a time such as "12:34" in equal 5-dot cells, so they don't shift
+static int tickerBuildDigits(const char* text, uint8_t* cols, int max_cols) {
+  int len = 0;
+  for (const char* s = text; *s && len < max_cols - 6; s++) {
+    const TickerGlyph* gl = tickerGlyph((uint8_t)*s);
+    if (!gl) continue;
+    int cell = (*s >= '0' && *s <= '9') ? 5 : gl->w;
+    int pad = (cell - gl->w) / 2;
+    for (int i = 0; i < cell; i++) {
+      int g = i - pad;
+      cols[len++] = (g >= 0 && g < gl->w) ? gl->cols[g] : 0;
+    }
+    cols[len++] = 0;
+  }
+  if (len > 0) len--;   // no gap after the last one
+  return len;
+}
+
+// dot columns at (x, y) in physical pixels; each dot is `dot` wide, `lit` of it lit
+static void tickerDraw(DisplayDriver& display, const uint8_t* cols, int n, int x, int y, int dot, int lit) {
+  int fw = display.frameWidth();
+  for (int c = 0; c < n; c++) {
+    int px = x + c * dot;
+    if (px < 0 || px + lit > fw) continue;
+    uint8_t bits = cols[c];
+    for (int r = 0; bits; r++, bits >>= 1) {
+      if (bits & 1) display.fillRectPx(px, y + r * dot, lit, lit);
+    }
+  }
+}
 #endif
 
 struct PowerChoice {
@@ -265,7 +328,7 @@ class HomeScreen : public UIScreen {
   bool _bcn_edit = false;    // Beacon page: changing settings
 
   // Msg scroll page: running line and keyboard settings in one place
-  #define MSG_SET_ROWS 5
+  #define MSG_SET_ROWS 6
   #define MSG_SET_SHOWN 3
   void changeMsgSetting() {
     if (!_node_prefs) return;
@@ -279,8 +342,10 @@ class HomeScreen : public UIScreen {
       _node_prefs->auto_caps = _node_prefs->auto_caps ? 0 : 1;
     } else if (_msg_row == 3) {
       _node_prefs->auto_cursor = _node_prefs->auto_cursor ? 0 : 1;
-    } else {
+    } else if (_msg_row == 4) {
       _node_prefs->charge_clock = _node_prefs->charge_clock ? 0 : 1;
+    } else {
+      _node_prefs->sw_sport = _node_prefs->sw_sport ? 0 : 1;
     }
     the_mesh.savePrefs();
     _task->notify(UIEventType::ack);
@@ -1255,11 +1320,12 @@ public:
       // settings of incoming and outgoing messages; hold to change them
       bool ru = _task->langRu();
       const char* layout = _task->kbFreqLayout() ? (ru ? "частотн." : "freq") : (ru ? "ЙЦУКЕН" : "QWERTY");
-      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Keys layout", "Auto caps", "Auto cursor", "Big clock" };
+      const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Keys layout", "Auto caps", "Auto cursor", "Big clock", "Sport watch" };
       const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", layout,
                                            _task->autoCaps() ? "ON" : "OFF",
                                            _task->autoCursor() ? "ON" : "OFF",
-                                           _task->chargeClockEnabled() ? "ON" : "OFF" };
+                                           _task->chargeClockEnabled() ? "ON" : "OFF",
+                                           _task->swSport() ? "ON" : "OFF" };
       display.setTextSize(1);
       // three rows on screen; the window follows the cursor
       int top = 0;
@@ -1669,31 +1735,8 @@ class MsgPreviewScreen : public UIScreen {
   bool tk_active = false;
   char tk_origin[62];
 
-  static const TickerGlyph* tickerGlyph(uint32_t cp) {
-    if (cp >= 'a' && cp <= 'z') cp -= 0x20;
-    else if (cp >= 0x430 && cp <= 0x44F) cp -= 0x20;   // а..я -> А..Я
-    else if (cp == 0x451) cp = 0x401;                  // ё -> Ё
-    for (int i = 0; i < TICKER_GLYPH_COUNT; i++) {
-      if (TICKER_GLYPHS[i].cp == cp) return &TICKER_GLYPHS[i];
-    }
-    return NULL;
-  }
-
   void startTicker(const char* origin, const char* msg) {
-    tk_len = 0;
-    bool gap = true;   // swallow leading and repeated blanks
-    for (const char* s = msg; *s && tk_len < TICKER_MAX_COLS - 6; ) {
-      uint32_t cp = 0;
-      s = utf8Next(s, cp);
-      const TickerGlyph* gl = tickerGlyph(cp);
-      if (!gl) {            // space, emoji, anything without a glyph -> one blank
-        if (!gap) { for (int i = 0; i < 3; i++) tk_cols[tk_len++] = 0; gap = true; }
-        continue;
-      }
-      for (int i = 0; i < gl->w; i++) tk_cols[tk_len++] = gl->cols[i];
-      tk_cols[tk_len++] = 0;   // one dot between letters
-      gap = false;
-    }
+    tk_len = tickerBuild(msg, tk_cols, TICKER_MAX_COLS);
     if (tk_len == 0) { tk_active = false; return; }
     StrHelper::strncpy(tk_origin, origin, sizeof(tk_origin));
     tk_pos = 0;
@@ -2355,7 +2398,8 @@ public:
 
 // Stopwatch and timer, one button. Six clicks or more open it (the Write
 // keyboard keeps its own five-click key); every other gesture stays as it was.
-//   stopwatch: counts from the moment it opens. press - exit, hold - timer
+//   stopwatch: counts from the moment it opens. press - exit, hold - timer,
+//              double - exit but keep counting (six clicks show it again)
 //   timer set: press +1 min, double +5 min, hold - start, triple - exit
 //   timer run: press - exit (it keeps running), hold - cancel
 //   time is up: the screen flashes (and beeps where there is a buzzer); press - exit
@@ -2365,6 +2409,7 @@ public:
 private:
   UITask* _task;
   Mode _mode = SW;
+  bool _sw_keep = false;           // left with a double click: keeps counting
   unsigned long _sw_start = 0;
   unsigned long _end = 0;          // timer: millis() when it rings
   unsigned long _rang_at = 0;
@@ -2380,12 +2425,41 @@ private:
 public:
   TimerScreen(UITask* task) : _task(task) {}
 
-  // six clicks: a running timer is shown, otherwise a fresh stopwatch starts
+  // six clicks: a running timer or a kept stopwatch is shown, otherwise a fresh stopwatch starts
   void open() {
     if (_mode == RUN || _mode == DONE) return;
+    if (_mode == SW && _sw_keep) return;
     _mode = SW;
     _sw_start = millis();
   }
+  bool counting() const { return _mode == SW && _sw_keep; }
+
+#ifdef UI_MSG_TICKER
+  // sport view: MM:SS in dots with the milliseconds next to it in smaller dots
+  static void drawSport(DisplayDriver& display, const char* t, unsigned long ms, int band) {
+    uint8_t big[48], small[24];
+    char m[5];
+    sprintf(m, ".%03lu", ms % 1000UL);
+    int nb = tickerBuildDigits(t, big, sizeof(big));
+    int ns = tickerBuildDigits(m, small, sizeof(small));
+    int fw = display.frameWidth(), fh = display.frameHeight();
+    int area = fh - 2 * band;
+    for (int d = 16; d >= 2; d--) {
+      int sd = (d + 1) / 2;
+      int gap = sd;
+      int w = nb * d + gap + ns * sd;
+      if (7 * d > area || w > fw - 2) continue;
+      int x = (fw - w) / 2;
+      int y = band + (area - 7 * d) / 2;
+      int lit = d >= 4 ? d - 1 : d;
+      int slit = sd >= 4 ? sd - 1 : sd;
+      tickerDraw(display, big, nb, x, y, d, lit);
+      tickerDraw(display, small, ns, x + nb * d + gap, y + 7 * d - 7 * sd, sd, slit);
+      return;
+    }
+    bigDrawCentred(display, t, band);
+  }
+#endif
   // the timer ran out while another screen was up
   bool due() const { return _mode == RUN && (long)(millis() - _end) >= 0; }
 
@@ -2430,7 +2504,16 @@ public:
         unsigned long ms = now - _sw_start;
         fmt(t, ms / 1000UL);
         title = ru ? "Секундомер" : "Stopwatch";
-        hint = ru ? "держать: таймер" : "hold: timer";
+        hint = ru ? "2х фон, держ. таймер" : "2x: keep  hold: timer";
+#ifdef UI_MSG_TICKER
+        if (!eink && _task->swSport()) {
+          display.drawTextLeftAlign(0, 0, title);
+          display.drawTextCentered(W / 2, H - 9, hint);
+          drawSport(display, t, ms, band);
+          display.markFull();
+          return 47;   // milliseconds keep running
+        }
+#endif
         if (!eink) {   // tenths in the top-right corner
           char d[4];
           sprintf(d, ".%lu", (ms / 100UL) % 10UL);
@@ -2473,7 +2556,11 @@ public:
   bool handleInput(char c) override {
     switch (_mode) {
       case SW:
-        if (c == KEY_ENTER) { _mode = SET; _minutes = 1; return true; }
+        if (c == KEY_ENTER) { _mode = SET; _minutes = 1; _sw_keep = false; return true; }
+        // double click: leave, the stopwatch keeps counting (six clicks bring it back);
+        // a press or anything else: leave and stop it
+        _sw_keep = (c == KEY_PREV || c == KEY_LEFT);
+        if (_sw_keep) _task->showAlert(_task->langRu() ? "Секундомер идёт" : "Stopwatch runs", 900);
         _task->gotoHomeScreen();
         return true;
       case SET:
@@ -2502,6 +2589,88 @@ public:
     }
   }
 };
+
+#ifdef UI_MSG_TICKER
+// Badge for a show: ten clicks or more. The line from `set badge` (the node
+// name until one is set) first fills the screen width in one line, then after
+// BADGE_STILL_MS runs across in big dots, and again. Any press leaves.
+#ifndef BADGE_STILL_MS
+  #define BADGE_STILL_MS  2500
+#endif
+class BadgeScreen : public UIScreen {
+  UITask* _task;
+  uint8_t _cols[BADGE_MAX_COLS];
+  int _len = 0;
+  int _pos = 0;
+  bool _running = false;
+  unsigned long _still_at = 0;
+public:
+  BadgeScreen(UITask* task) : _task(task) {}
+
+  void open() {
+    _len = tickerBuild(the_mesh.uiBadge(), _cols, BADGE_MAX_COLS);
+    _running = false;
+    _still_at = millis();
+  }
+
+  int render(DisplayDriver& display) override {
+    _task->keepDisplayAwake();
+    int fw = display.frameWidth(), fh = display.frameHeight();
+    display.setColor(UIColor::primary_txt);
+    if (_len == 0) {
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, display.height() / 2 - 4, "set badge <text>");
+      return 1000;
+    }
+    int run_dot = fh / 7;
+    if (run_dot > TICKER_DOT * 2) run_dot = TICKER_DOT * 2;
+    if (run_dot < 2) run_dot = 2;
+
+    if (!_running) {   // the whole line across the screen
+      int dot = (fw - 2) / _len;
+      if (dot * 7 > fh) dot = fh / 7;
+      if (dot < 1) dot = 1;
+      int lit = dot > TICKER_DOT_GAP + 2 ? dot - TICKER_DOT_GAP : dot;
+      int x0 = (fw - _len * dot) / 2;
+      if (x0 < 0) x0 = 0;
+      tickerDraw(display, _cols, _len, x0, (fh - 7 * dot) / 2, dot, lit);
+      display.markFull();
+      // e-ink, or the line already as big as it would run: it just stays
+      if (_task->isEink() || dot >= run_dot) return 60000;
+      unsigned long el = millis() - _still_at;
+      if (el < BADGE_STILL_MS) return (int)(BADGE_STILL_MS - el);
+      _running = true;
+      _pos = 0;
+      return 50;
+    }
+
+    int lit = run_dot > TICKER_DOT_GAP + 1 ? run_dot - TICKER_DOT_GAP : run_dot;
+    int screen_cols = (fw + run_dot - 1) / run_dot;
+    int x0 = (fw - screen_cols * run_dot) / 2;
+    int y0 = (fh - 7 * run_dot) / 2;
+    int from = _pos - screen_cols;   // text enters from the right edge
+    int first = from < 0 ? -from : 0;
+    if (first < screen_cols) {
+      int n = screen_cols - first;
+      if (from + first + n > _len) n = _len - (from + first);
+      if (n > 0) tickerDraw(display, _cols + from + first, n, x0 + first * run_dot, y0, run_dot, lit);
+    }
+    display.markFull();
+    if (++_pos > _len + screen_cols) {   // gone: show the whole line again
+      _running = false;
+      _still_at = millis();
+      return 50;
+    }
+    return TICKER_STEP_MS;
+  }
+
+  bool handleInput(char c) override {
+    (void)c;
+    _task->gotoHomeScreen();
+    return true;
+  }
+};
+#endif
 
 // SOS: a 5 s hold anywhere (but in a game) arms it; after a 5 s countdown it
 // sends "SOS! geo:..." to the SOS channel and every favourite, then again every
@@ -2585,6 +2754,14 @@ void UITask::openStopwatch() {
   setCurrScreen(stopwatch);
 }
 
+void UITask::openBadge() {
+#ifdef UI_MSG_TICKER
+  if (!badge) return;
+  ((BadgeScreen*)badge)->open();
+  setCurrScreen(badge);
+#endif
+}
+
 void UITask::toggleTicker() {
 #ifdef UI_MSG_TICKER
   _node_prefs->msg_ticker = _node_prefs->msg_ticker ? 0 : 1;
@@ -2638,6 +2815,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   clock = (display != NULL && display->isEink())
       ? new ClockScreen(this, &rtc_clock, (MsgPreviewScreen*)msg_preview, node_prefs) : NULL;
   stopwatch = display != NULL ? new TimerScreen(this) : NULL;
+#ifdef UI_MSG_TICKER
+  badge = display != NULL ? new BadgeScreen(this) : NULL;
+#endif
   games = display != NULL ? new GamesScreen(this) : NULL;
   sos = display != NULL ? new SosScreen(this) : NULL;
   charge_clock = (display != NULL && !display->isEink())
@@ -2771,7 +2951,7 @@ void UITask::msgRead(int msgcount) {
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
   // an open message window stays open: only button presses read it
-  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch() && !inGames() && !inSos()) {
+  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch() && !inBadge() && !inGames() && !inSos()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -2783,7 +2963,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text, group);
   _idle_since = millis();   // the big clock waits before covering the new message
-  if (curr == clock || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGames() || inSos()) {   // reader, writer and Sent only show an envelope
+  if (curr == clock || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inSos()) {   // reader, writer and Sent only show an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
@@ -2958,8 +3138,10 @@ void UITask::loop() {
     c = handleQuadClick(KEY_QUAD);
   } else if (ev == BUTTON_EVENT_PENTA_CLICK) {   // only the Write keyboard tells five from four
     c = handleQuadClick((inCompose() || inSent()) ? KEY_PENTA : KEY_QUAD);
-  } else if (ev == BUTTON_EVENT_HEXA_CLICK) {    // six or more: stopwatch (the keyboard keeps its five)
+  } else if (ev == BUTTON_EVENT_HEXA_CLICK) {    // six to nine: stopwatch (the keyboard keeps its five)
     c = handleManyClicks();
+  } else if (ev == BUTTON_EVENT_MANY_CLICK) {    // ten or more: badge
+    c = handleManyClicks(true);
   }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
@@ -2989,6 +3171,8 @@ void UITask::loop() {
       c = handleQuadClick((inCompose() || inSent()) ? KEY_PENTA : KEY_QUAD);
     } else if (ev == BUTTON_EVENT_HEXA_CLICK) {
       c = handleManyClicks();
+    } else if (ev == BUTTON_EVENT_MANY_CLICK) {
+      c = handleManyClicks(true);
     }
     _analogue_pin_read_millis = millis();
   }
@@ -3050,7 +3234,7 @@ void UITask::loop() {
       setCurrScreen(stopwatch);
       if (!_display->isOn()) _display->turnOn();
     }
-    if (curr == stopwatch || curr == games) _auto_off = millis() + AUTO_OFF_MILLIS;   // counting / playing stays in view
+    if (curr == stopwatch || curr == games || inBadge()) _auto_off = millis() + AUTO_OFF_MILLIS;   // counting / playing / badge stays in view
   }
 
   if (_display != NULL && _display->isOn()) {
@@ -3149,16 +3333,23 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGames() || inSos()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inSos()) return c;
   return 0;
 }
 
 // six clicks or more: the Write keyboard and Sent page take them as five,
-// anywhere else they open the stopwatch (or the running timer)
-char UITask::handleManyClicks() {
+// anywhere else six to nine open the stopwatch (or the running timer),
+// ten or more the badge
+char UITask::handleManyClicks(bool ten) {
   if (inCompose() || inSent()) return handleQuadClick(KEY_PENTA);
   if (inGames() || inSos()) return 0;   // fast tapping in a game (or SOS) is not a request for the stopwatch
-  if (_display == NULL || stopwatch == NULL) return 0;
+  if (_display == NULL) return 0;
+  if (ten && badge != NULL) {
+    if (!_display->isOn()) _display->turnOn();
+    openBadge();
+    return 0;
+  }
+  if (stopwatch == NULL) return 0;
   if (!_display->isOn()) _display->turnOn();
   openStopwatch();
   return 0;
@@ -3168,7 +3359,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGames() || inSos()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inSos()) return c;
   toggleBuzzer();
   return 0;
 }

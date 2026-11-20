@@ -81,6 +81,7 @@ public:
   uint8_t auto_cursor = 0;       // 1 = after a letter the keyboard cursor moves to the likely next one
   uint8_t sos_chan = 0;          // SOS goes to this channel (and to every favourite contact)
   uint16_t game_best[3] = {0, 0, 0};   // Games page records: Runner, Tower, Snake
+  uint8_t sw_sport = 0;          // 1 = the stopwatch shows milliseconds next to the seconds
   uint8_t charge_clock = 0;      // 1 = big clock instead of a dark screen (on the charger, or always where power can't be sensed)
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
   uint8_t clock_nodes[CLOCK_NODE_MAX][32];  // pubkeys to poll for time; empty slots are zeros
@@ -178,6 +179,7 @@ private:
       def("caps", _parent->auto_caps);      // automatic capitals
       def("acur", _parent->auto_cursor);    // keyboard cursor follows the likely next letter
       def("chclk", _parent->charge_clock);  // big clock on the charger
+      def("swsp", _parent->sw_sport);       // sport stopwatch: milliseconds
       def("sos_ch", _parent->sos_chan);
       def("gb_run", _parent->game_best[0]);  // game records
       def("gb_tow", _parent->game_best[1]);

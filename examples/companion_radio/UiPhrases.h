@@ -6,6 +6,7 @@
 
 #define UI_PHRASE_COUNT  18
 #define UI_PHRASE_LEN    32   // bytes with the terminating zero
+#define UI_BADGE_LEN     96   // badge line, bytes with the terminating zero
 
 static const char* const UI_PHRASES_EN[UI_PHRASE_COUNT] = {
   "ok", "ping", "yes", "no", "hello", "goodbye",

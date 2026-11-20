@@ -55,6 +55,7 @@ class UITask : public AbstractUITask {
   UIScreen* clock;
   UIScreen* charge_clock;   // big clock on the charger (non-e-ink)
   UIScreen* stopwatch;      // stopwatch and timer: six clicks
+  UIScreen* badge;          // badge line: ten clicks
   UIScreen* games;          // Games page: Runner, Tower, Snake
   UIScreen* sos;            // SOS: 5 s hold
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
@@ -77,7 +78,7 @@ class UITask : public AbstractUITask {
   char handleDoubleClick(char c);
   char handleTripleClick(char c);
   char handleQuadClick(char c);
-  char handleManyClicks();
+  char handleManyClicks(bool ten = false);
 
   void setCurrScreen(UIScreen* c);
 
@@ -90,6 +91,7 @@ public:
     clock = NULL;
     charge_clock = NULL;
     stopwatch = NULL;
+    badge = NULL;
     games = NULL;
     sos = NULL;
     reader = NULL;
@@ -112,6 +114,8 @@ public:
   bool inRelays() const { return curr != NULL && curr == relays; }
   void openStopwatch();
   bool inStopwatch() const { return curr != NULL && curr == stopwatch; }
+  void openBadge();
+  bool inBadge() const { return curr != NULL && curr == badge; }
   void openGames();
   bool inGames() const { return curr != NULL && curr == games; }
   bool inSos() const { return curr != NULL && curr == sos; }
@@ -141,6 +145,7 @@ public:
   bool kbFreqLayout() const { return _node_prefs != NULL && _node_prefs->kb_layout != 0; }
   bool autoCursor() const { return _node_prefs != NULL && _node_prefs->auto_cursor != 0; }
   bool chargeClockEnabled() const { return _node_prefs != NULL && _node_prefs->charge_clock != 0; }
+  bool swSport() const { return _node_prefs != NULL && _node_prefs->sw_sport != 0; }
   bool autoCaps() const { return _node_prefs == NULL || _node_prefs->auto_caps != 0; }
   void keepDisplayAwake();
   void requestRefresh() { _next_refresh = 0; }

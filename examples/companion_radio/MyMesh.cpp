@@ -474,6 +474,20 @@ void MyMesh::setUiPhrase(int i, const char* text) {
   _store->saveRaw("/phrases", _phrase_ovr, sizeof(_phrase_ovr));
 }
 
+void MyMesh::setUiBadge(const char* text) {
+  int n = 0;
+  while (text[n]) {   // whole UTF-8 letters only
+    uint8_t b = (uint8_t)text[n];
+    int l = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
+    if (n + l > UI_BADGE_LEN - 1) break;
+    n += l;
+  }
+  memcpy(_badge, text, n);
+  _badge[n] = 0;
+  while (n > 0 && _badge[n - 1] == ' ') _badge[--n] = 0;
+  _store->saveRaw("/badge", _badge, sizeof(_badge));
+}
+
 bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
   ChannelDetails channel;
   if (text[0] == 0 || !getChannel(channel_idx, channel) || channel.name[0] == 0) return false;
@@ -1457,6 +1471,8 @@ void MyMesh::begin(bool has_display) {
   _store->loadPrefs(_prefs);
   memset(_phrase_ovr, 0, sizeof(_phrase_ovr));
   relays.begin(_store);
+  if (_store->loadRaw("/badge", _badge, sizeof(_badge))) _badge[UI_BADGE_LEN - 1] = 0;
+  else _badge[0] = 0;
   if (_store->loadRaw("/phrases", _phrase_ovr, sizeof(_phrase_ovr))) {
     for (int i = 0; i < UI_PHRASE_COUNT; i++) _phrase_ovr[i][UI_PHRASE_LEN - 1] = 0;
   } else {
@@ -2819,7 +2835,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set badge [text], set sport on|off, set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -3121,6 +3137,29 @@ void MyMesh::runCLICommand(char* command, Print& out) {
         snprintf(line, sizeof(line), "  > caps is %s\n", _prefs.auto_caps ? "on" : "off");
       }
       out.print(line);
+    } else if (strcmp(command, "badge") == 0 ||
+               (memcmp(command, "set badge", 9) == 0 && (command[9] == 0 || command[9] == ' '))) {
+      // set badge text | set badge (back to the node name); ten clicks show it
+      if (command[0] == 's') {
+        const char* arg = &command[9];
+        while (*arg == ' ') arg++;
+        setUiBadge(arg);
+      }
+      out.print("  > badge: ");
+      out.print(uiBadge());
+      out.print(uiBadgeCustom() ? "\n" : " (node name)\n");
+    } else if (memcmp(command, "set sport", 9) == 0 && (command[9] == 0 || command[9] == ' ')) {
+      // set sport on|off: the stopwatch shows milliseconds next to the seconds
+      const char* arg = &command[9];
+      while (*arg == ' ') arg++;
+      if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+        _prefs.sw_sport = strcmp(arg, "on") == 0 ? 1 : 0;
+        savePrefs();
+      } else if (*arg) {
+        out.print("  Error: set sport on|off\n");
+        return;
+      }
+      out.print(_prefs.sw_sport ? "  > sport is on\n" : "  > sport is off\n");
     } else if (memcmp(command, "set ", 4) == 0 && memcmp(&command[4], "phrase", 6) == 0 &&
                (command[10] == 0 || command[10] == ' ')) {
       // set phrase N text | set phrase N (back to the stock phrase)

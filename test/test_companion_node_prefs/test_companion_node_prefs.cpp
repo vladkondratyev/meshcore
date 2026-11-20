@@ -102,6 +102,20 @@ TEST(CompanionNodePrefs, BigClockAndBeaconMoveRoundTrip) {
   EXPECT_EQ(15, loaded.beacon_chat_mins);
 }
 
+// sport stopwatch (milliseconds next to the seconds) survives a save and a load
+TEST(CompanionNodePrefs, SportStopwatchRoundTrip) {
+  NodePrefs saved;
+  saved.sw_sport = 1;
+  CaptureStream output;
+  ASSERT_TRUE(saved.saveSerial(output));
+  EXPECT_NE(std::string::npos, output.text().find("swsp:1"));
+  ReplayStream input(output.text().c_str());
+  NodePrefs loaded;
+  ASSERT_EQ(0, loaded.sw_sport);
+  ASSERT_TRUE(loaded.loadSerial(input));
+  EXPECT_EQ(1, loaded.sw_sport);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
