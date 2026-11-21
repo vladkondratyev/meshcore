@@ -82,6 +82,12 @@ public:
   uint8_t sos_chan = 0;          // SOS goes to this channel (and to every favourite contact)
   uint16_t game_best[5] = {0, 0, 0, 0, 0};   // Games page records: Runner, Tower, Snake, Blocks, Raid
   uint8_t sw_sport = 0;          // 1 = the stopwatch shows milliseconds next to the seconds
+  uint8_t key_lock = 1;          // 1 = once the screen went dark, only a double click wakes the keys
+  uint8_t night_on = 0;          // 1 = quiet hours: no sound or buzz for messages
+  uint8_t night_from = 23;       // quiet hours start, local hour
+  uint8_t night_to = 7;          // quiet hours end, local hour
+  uint8_t alarm_on = 0;          // 1 = the alarm rings every day at alarm_min
+  uint16_t alarm_min = 7 * 60;   // alarm time, minutes after local midnight
   uint8_t charge_clock = 0;      // 1 = big clock instead of a dark screen (on the charger, or always where power can't be sensed)
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
   uint8_t clock_nodes[CLOCK_NODE_MAX][32];  // pubkeys to poll for time; empty slots are zeros
@@ -180,6 +186,12 @@ private:
       def("acur", _parent->auto_cursor);    // keyboard cursor follows the likely next letter
       def("chclk", _parent->charge_clock);  // big clock on the charger
       def("swsp", _parent->sw_sport);       // sport stopwatch: milliseconds
+      def("klock", _parent->key_lock);      // key lock after the screen goes dark
+      def("ngt", _parent->night_on);        // quiet hours
+      def("ngt_f", _parent->night_from);
+      def("ngt_t", _parent->night_to);
+      def("alm", _parent->alarm_on);        // alarm clock
+      def("alm_m", _parent->alarm_min);
       def("sos_ch", _parent->sos_chan);
       def("gb_run", _parent->game_best[0]);  // game records
       def("gb_tow", _parent->game_best[1]);

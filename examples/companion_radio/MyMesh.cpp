@@ -348,6 +348,39 @@ void MyMesh::uiRetryCheck() {
 #endif
 }
 
+bool MyMesh::uiPing(const uint8_t* pub_prefix) {
+  bool ru = _prefs.ui_lang != UI_LANG_EN;
+  if (uiSendDirect(pub_prefix, ru ? "пинг" : "ping") == 0) return false;
+  memcpy(_ping_key, pub_prefix, 6);
+  _ping_on = true;
+  _ping_done = false;
+  _ping_start = millis();
+  _ping_rtt = 0;
+  _ping_hops = -1;
+  return true;
+}
+
+uint8_t MyMesh::uiPingState() const {
+  if (_ping_done) return PING_OK;
+  if (!_ping_on) return PING_NONE;
+  // every attempt has timed out
+  if (_ui_ack != 0 && !_ui_ack_ok && _ui_try + 1 >= UI_SEND_ATTEMPTS && millisHasNowPassed(_ui_ack_until)) return PING_LOST;
+  if (_ui_ack == 0 && !_ui_ack_ok) return PING_LOST;   // another message from the device took over
+  return PING_WAIT;
+}
+
+bool MyMesh::nightNow() const {
+  if (!_prefs.night_on) return false;
+  uint32_t now = const_cast<MyMesh*>(this)->getRTCClock()->getCurrentTime();
+  if (now < 1000000000UL) return false;
+  int64_t local = (int64_t)now + (int64_t)_prefs.tz_offset_mins * 60;
+  if (local < 0) local = 0;
+  int h = (int)(((uint32_t)local / 3600UL) % 24UL);
+  int from = _prefs.night_from % 24, to = _prefs.night_to % 24;
+  if (from == to) return true;
+  return from < to ? (h >= from && h < to) : (h >= from || h < to);
+}
+
 bool MyMesh::uiMyPosition(char* buf, size_t n) {
 #if ENV_INCLUDE_GPS == 1
   if (!_prefs.gps_enabled || !beaconHasFix()) return false;
@@ -407,6 +440,19 @@ void MyMesh::sosSend(bool all_clear) {
   uiMyPosition(pos, sizeof(pos));   // stays "" without a fix
   if (all_clear) snprintf(text, sizeof(text), "%s %s", ru ? "SOS: отбой, всё в порядке." : "SOS: all clear.", pos);
   else snprintf(text, sizeof(text), "%s %s", ru ? "SOS! Нужна помощь." : "SOS! Need help.", pos[0] ? pos : (ru ? "(нет GPS)" : "(no GPS)"));
+  sendToSosTargets(text);
+}
+
+void MyMesh::okSend() {
+  bool ru = _prefs.ui_lang != UI_LANG_EN;
+  char text[80];
+  char pos[40] = "";
+  uiMyPosition(pos, sizeof(pos));
+  snprintf(text, sizeof(text), "%s %s", ru ? "Я в порядке." : "I'm OK.", pos);
+  sendToSosTargets(text);
+}
+
+void MyMesh::sendToSosTargets(const char* text) {
   uint32_t ts = getRTCClock()->getCurrentTimeUnique();
   ChannelDetails ch;
   if (getChannel(_prefs.sos_chan, ch) && ch.name[0]) sendGroupMessage(ts, ch.channel, _prefs.node_name, text, strlen(text));
@@ -545,6 +591,7 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
 }
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
+  _last_rx_snr4 = (int8_t)(snr * 4);   // a ping reads it when its ack arrives
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
     int i = 0;
     out_frame[i++] = PUSH_CODE_LOG_RX_DATA;
@@ -765,6 +812,14 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
     uint32_t current = _ui_ack;   // the Sent list holds the latest attempt's ack
     _ui_ack = 0;
     _ui_ack_ok = true;
+    if (_ping_on) {   // a ping came back
+      _ping_on = false;
+      _ping_done = true;
+      _ping_rtt = millis() - _ping_start;
+      _ping_snr4 = _last_rx_snr4;
+      ContactInfo* pc = lookupContactByPubKey(_ping_key, 6);
+      _ping_hops = (pc && pc->out_path_len != OUT_PATH_UNKNOWN) ? (pc->out_path_len & 0x3F) : -1;
+    }
     memset(_ui_try_acks, 0, sizeof(_ui_try_acks));
 #ifdef DISPLAY_CLASS
     if (_ui) {
@@ -2673,6 +2728,24 @@ void MyMesh::checkCLIRescueCmd() {
   }
 }
 
+// Builds that talk to the phone over Bluetooth or WiFi leave the USB port
+// free: console commands typed there get answered (ver, stats, set ...).
+void MyMesh::checkUsbConsole() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') continue;
+    if (c != '\r' && _usb_len < sizeof(_usb_cmd) - 1) {
+      _usb_cmd[_usb_len++] = c;
+      continue;
+    }
+    if (c == '\r') {
+      _usb_cmd[_usb_len] = 0;
+      if (_usb_len > 0) runCLICommand(_usb_cmd, Serial);
+      _usb_len = 0;
+    }
+  }
+}
+
 bool MyMesh::isConsoleKey(const uint8_t* key, int len) {
   if (len <= 0 || len > PUB_KEY_SIZE) return false;
   return memcmp(key, CONSOLE_PUB_KEY, len) == 0;
@@ -2835,7 +2908,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set badge [text], set sport on|off, set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set badge [text], set sport on|off, set lock on|off, set night on|off|23-7, set alarm HH:MM|on|off, ok, set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -3148,6 +3221,61 @@ void MyMesh::runCLICommand(char* command, Print& out) {
       out.print("  > badge: ");
       out.print(uiBadge());
       out.print(uiBadgeCustom() ? "\n" : " (node name)\n");
+    } else if (memcmp(command, "set lock", 8) == 0 && (command[8] == 0 || command[8] == ' ')) {
+      // set lock on|off: once the screen went dark, only a double click wakes the keys
+      const char* arg = &command[8];
+      while (*arg == ' ') arg++;
+      if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+        _prefs.key_lock = strcmp(arg, "on") == 0 ? 1 : 0;
+        savePrefs();
+      } else if (*arg) {
+        out.print("  Error: set lock on|off\n");
+        return;
+      }
+      out.print(_prefs.key_lock ? "  > key lock is on\n" : "  > key lock is off\n");
+    } else if (memcmp(command, "set night", 9) == 0 && (command[9] == 0 || command[9] == ' ')) {
+      // set night on|off | set night 23-7: quiet hours for messages
+      const char* arg = &command[9];
+      while (*arg == ' ') arg++;
+      int a = -1, b = -1;
+      if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+        _prefs.night_on = strcmp(arg, "on") == 0 ? 1 : 0;
+        savePrefs();
+      } else if (sscanf(arg, "%d-%d", &a, &b) == 2 && a >= 0 && a < 24 && b >= 0 && b < 24) {
+        _prefs.night_from = a;
+        _prefs.night_to = b;
+        _prefs.night_on = 1;
+        savePrefs();
+      } else if (*arg) {
+        out.print("  Error: set night on|off|23-7\n");
+        return;
+      }
+      snprintf(line, sizeof(line), "  > quiet hours %s, %02d:00-%02d:00\n", _prefs.night_on ? "on" : "off",
+               _prefs.night_from, _prefs.night_to);
+      out.print(line);
+    } else if (memcmp(command, "set alarm", 9) == 0 && (command[9] == 0 || command[9] == ' ')) {
+      // set alarm 7:30 | set alarm on|off: rings every day
+      const char* arg = &command[9];
+      while (*arg == ' ') arg++;
+      int h = -1, m = -1;
+      if (strcmp(arg, "on") == 0 || strcmp(arg, "off") == 0) {
+        _prefs.alarm_on = strcmp(arg, "on") == 0 ? 1 : 0;
+        savePrefs();
+      } else if (sscanf(arg, "%d:%d", &h, &m) == 2 && h >= 0 && h < 24 && m >= 0 && m < 60) {
+        _prefs.alarm_min = h * 60 + m;
+        _prefs.alarm_on = 1;
+        savePrefs();
+      } else if (*arg) {
+        out.print("  Error: set alarm HH:MM|on|off\n");
+        return;
+      }
+      snprintf(line, sizeof(line), "  > alarm %s, %02d:%02d\n", _prefs.alarm_on ? "on" : "off",
+               _prefs.alarm_min / 60, _prefs.alarm_min % 60);
+      out.print(line);
+    } else if (strcmp(command, "ok") == 0) {
+      // "I'm OK" with the position to the SOS channel and favourites
+      okSend();
+      out.print("  > sent: I'm OK\n");
     } else if (memcmp(command, "set sport", 9) == 0 && (command[9] == 0 || command[9] == ' ')) {
       // set sport on|off: the stopwatch shows milliseconds next to the seconds
       const char* arg = &command[9];
@@ -3684,6 +3812,9 @@ void MyMesh::loop() {
     checkCLIRescueCmd();
   } else {
     checkSerialInterface();
+#if !defined(ENABLE_USB_INTERFACE)
+    checkUsbConsole();
+#endif
   }
 
   // is there are pending dirty contacts write needed?

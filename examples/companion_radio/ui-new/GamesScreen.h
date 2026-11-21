@@ -12,6 +12,7 @@
 //   Raid    the ship flies by itself and fires; press - turn back (taken at
 //           the press), keep it pressed - rapid fire
 //   game over: click - again, triple - back to the menu
+//   a message comes in: the game pauses; click - go on, triple - menu
 // Triple click leaves any game.
 
 #include "UITask.h"
@@ -20,7 +21,7 @@
 
 class GamesScreen : public UIScreen {
   enum Game { RUNNER, TOWER, SNAKE, BLOCKS, RAID, GAME_COUNT };
-  enum State { MENU, PLAY, OVER };
+  enum State { MENU, PLAY, OVER, PAUSE };
 
   UITask* _task;
   State _state = MENU;
@@ -28,6 +29,7 @@ class GamesScreen : public UIScreen {
   uint16_t* _best;   // records, kept in the node prefs
   uint16_t _no_prefs[GAME_COUNT] = {0, 0, 0, 0, 0};
   uint16_t _score = 0;
+  int _unread_seen = 0;        // a new message pauses the game
   bool _was_pressed = true;   // a press counts only after the button was seen up
   unsigned long _next_step = 0;
 
@@ -412,8 +414,8 @@ class GamesScreen : public UIScreen {
       if (_rfy + bottom * RD_DY + RD_EH >= RD_SHIP_Y) return false;   // they reached the ship
     }
     // shots down, from the lowest target of a random column
-    int chance = 45 - _rwave * 5;
-    if (chance < 12) chance = 12;
+    int chance = 60 - _rwave * 6;   // the first waves drop less
+    if (chance < 14) chance = 14;
     if (random(0, chance) == 0) {
       int c = random(0, RD_COLS);
       for (int r = RD_ROWS - 1; r >= 0; r--) {
@@ -475,6 +477,7 @@ class GamesScreen : public UIScreen {
     else if (_game == BLOCKS) blStart();
     else rdStart();
     _next_step = millis() + (_game == SNAKE || _game == BLOCKS ? 400 : 0);
+    _unread_seen = _task->getUnreadCount();
   }
   void over() {
     _state = OVER;
@@ -495,6 +498,9 @@ public:
 
   void poll() override {
     if (_state != PLAY) return;
+    int unread = _task->getUnreadCount();
+    if (unread > _unread_seen) { _state = PAUSE; _unread_seen = unread; return; }
+    _unread_seen = unread;
     bool press = pressEdge();
     unsigned long now = millis();
     if (_game == SNAKE) {
@@ -565,6 +571,17 @@ public:
     else if (_game == BLOCKS) blDraw(d);
     else rdDraw(d);
 
+    if (_state == PAUSE) {
+      d.setColor(UIColor::window_bkg);
+      d.fillRect(6, 14, W - 12, 38);
+      d.setColor(UIColor::primary_txt);
+      d.drawRect(6, 14, W - 12, 38);
+      d.drawTextCentered(W / 2, 18, "Pause: message");
+      d.setColor(UIColor::secondary_txt);
+      d.drawTextCentered(W / 2, 30, "click: go on");
+      d.drawTextCentered(W / 2, 40, "3x: menu");
+      return 1000;
+    }
     if (_state == OVER) {
       d.setColor(UIColor::window_bkg);
       d.fillRect(6, 14, W - 12, 38);
@@ -592,6 +609,14 @@ public:
       else if (c == KEY_PREV || c == KEY_LEFT) _game = (_game + GAME_COUNT - 1) % GAME_COUNT;
       else if (c == KEY_ENTER) start();
       else if (c == KEY_QUAD) _task->gotoHomeScreen();
+      return true;
+    }
+    if (_state == PAUSE) {
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_ENTER) {
+        _state = PLAY;
+        _was_pressed = true;
+        _next_step = millis() + 300;
+      }
       return true;
     }
     if (_state == OVER) {

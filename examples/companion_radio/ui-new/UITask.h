@@ -22,6 +22,7 @@
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
 #include "SentLog.h"
+#include "ChatLog.h"
 
 class UITask : public AbstractUITask {
   DisplayDriver* _display;
@@ -63,6 +64,21 @@ class UITask : public AbstractUITask {
   UIScreen* compose;   // Write page: message typed on the device
   UIScreen* sent;      // Sent page: what the device sent, to whom, in reply to what
   UIScreen* relays;    // Relays page: smart switches
+  UIScreen* chats;     // Chats page: messages both ways per contact / channel
+  UIScreen* sos_alert; // an SOS came in: the screen flashes until a press
+  ChatLog _chat_log;
+  bool _locked = false;
+  uint8_t _vib_more = 0;           // vibration pulses still to come
+  unsigned long _vib_next = 0;            // key lock: the screen went dark, a double click wakes the keys
+  #define BATT_SAMPLES 13          // one every 5 minutes: an hour of history
+  uint16_t _batt_mv[BATT_SAMPLES];
+  uint8_t _batt_n = 0;
+  unsigned long _batt_next = 0;
+  int _alarm_day = -1;             // the day the alarm last rang
+  bool keyLockFilter(int ev);
+  void goHomeAll();
+  void checkAlarm();
+  void sampleBattery();
   SentLog _sent_log;
   UIScreen* curr;
   unsigned long _idle_since;
@@ -100,6 +116,8 @@ public:
     compose = NULL;
     sent = NULL;
     relays = NULL;
+    chats = NULL;
+    sos_alert = NULL;
     _idle_since = 0;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
@@ -116,6 +134,14 @@ public:
   bool inRelays() const { return curr != NULL && curr == relays; }
   void openStopwatch();
   bool inStopwatch() const { return curr != NULL && curr == stopwatch; }
+  ChatLog& chatLog() { return _chat_log; }
+  void openChats();
+  int chatPages();
+  bool inChats() const { return curr != NULL && curr == chats; }
+  bool inSosAlert() const { return curr != NULL && curr == sos_alert; }
+  void openAlarm();
+  // battery: about how many minutes are left; -1 not known yet, -2 charging
+  long battMinutesLeft() const;
   void openGlance();
   bool inGlance() const { return curr != NULL && curr == glance; }
   void openBadge();

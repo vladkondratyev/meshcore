@@ -145,6 +145,19 @@ public:
   uint16_t sosRounds() const { return _sos_rounds; }
   uint32_t sosNextSecs() const;
   void sosTargets(char* buf, size_t n);
+  // "I'm OK" with the position, once, to the same channel and favourites as SOS
+  void okSend();
+  // ping a contact from the device: a short message with an ack. The result
+  // tells how long the ack took, how many hops the path has and the SNR heard.
+  enum { PING_NONE = 0, PING_WAIT, PING_OK, PING_LOST };
+  bool uiPing(const uint8_t* pub_prefix);
+  uint8_t uiPingState() const;
+  uint32_t uiPingRtt() const { return _ping_rtt; }
+  int uiPingHops() const { return _ping_hops; }      // -1: unknown
+  int uiPingSnr() const { return _ping_snr4; }       // SNR x4 of the last hop
+  const uint8_t* uiPingKey() const { return _ping_key; }
+  // quiet hours: no sound or buzz for messages
+  bool nightNow() const;
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
   // Write page phrases: the console replaces any of them (set phrase N text)
@@ -274,6 +287,20 @@ private:
   uint16_t _sos_rounds = 0;
   unsigned long _sos_next = 0;
   void sosSend(bool all_clear);
+  void sendToSosTargets(const char* text);
+  // ping from the device
+  bool _ping_on = false;
+  bool _ping_done = false;
+  unsigned long _ping_start = 0;
+  uint8_t _ping_key[6] = {0};
+  uint32_t _ping_rtt = 0;
+  int _ping_hops = -1;
+  int _ping_snr4 = 0;
+  int8_t _last_rx_snr4 = 0;
+  // console on the USB port of builds that talk to the phone over Bluetooth / WiFi
+  char _usb_cmd[96];
+  uint8_t _usb_len = 0;
+  void checkUsbConsole();
   void checkSos();
   unsigned long _loop_max = 0, _loop_ui_max = 0, _loop_since = 0;
   uint32_t _loop_slow = 0, _loop_n = 0;
