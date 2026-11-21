@@ -1393,7 +1393,7 @@ public:
   bool handleInput(char c) override {
     if (c == KEY_QUAD) {
 #if ENV_INCLUDE_GPS == 1
-      if (_page != HomePage::BEACON) return false;
+      if (_page != HomePage::BEACON) { _task->openGlance(); return true; }   // four clicks: time at a glance
       _bcn_edit = false;
       if (the_mesh.stopBeacon()) {
         _task->notify(UIEventType::ack);
@@ -1401,7 +1401,8 @@ public:
       }
       return true;
 #else
-      return false;
+      _task->openGlance();
+      return true;
 #endif
     }
     if (c == KEY_SELECT) {
@@ -2397,9 +2398,14 @@ public:
 };
 
 // Stopwatch and timer, one button. Six clicks or more open it (the Write
-// keyboard keeps its own five-click key); every other gesture stays as it was.
-//   stopwatch: counts from the moment it opens. press - exit, hold - timer,
-//              double - exit but keep counting (six clicks show it again)
+// keyboard keeps its own five-click key). The stopwatch works like a watch:
+//   stopwatch: counts from the moment it opens.
+//              press - stop / go on from the same time,
+//              double - running: split (the shown time stops, the count goes on;
+//                       double again shows it running), stopped: reset to 00:00,
+//              triple - exit, it keeps counting (or stays stopped); six clicks
+//                       or a hold on the time view (four clicks) bring it back,
+//              hold - timer (the stopwatch keeps its time)
 //   timer set: press +1 min, double +5 min, hold - start, triple - exit
 //   timer run: press - exit (it keeps running), hold - cancel
 //   time is up: the screen flashes (and beeps where there is a buzzer); press - exit
@@ -2409,30 +2415,47 @@ public:
 private:
   UITask* _task;
   Mode _mode = SW;
-  bool _sw_keep = false;           // left with a double click: keeps counting
-  unsigned long _sw_start = 0;
+  bool _sw_run = false;            // counting now
+  bool _sw_split = false;          // the shown time is held, the count goes on
+  unsigned long _sw_start = 0;     // millis() when the current run began
+  unsigned long _sw_acc = 0;       // ms counted before the current run
+  unsigned long _sw_split_ms = 0;
   unsigned long _end = 0;          // timer: millis() when it rings
   unsigned long _rang_at = 0;
   unsigned long _next_beep = 0;
   int _minutes = 1;
 
+public:
   static void fmt(char* buf, unsigned long secs) {
     unsigned long h = secs / 3600UL, m = (secs / 60UL) % 60UL, sec = secs % 60UL;
     if (h > 0) sprintf(buf, "%lu:%02lu:%02lu", h, m, sec);
     else sprintf(buf, "%02lu:%02lu", m, sec);
   }
 
-public:
   TimerScreen(UITask* task) : _task(task) {}
 
-  // six clicks: a running timer or a kept stopwatch is shown, otherwise a fresh stopwatch starts
+  unsigned long swElapsed() const { return _sw_acc + (_sw_run ? millis() - _sw_start : 0UL); }
+  bool swRunning() const { return _sw_run; }
+  bool swSplit() const { return _sw_run && _sw_split; }
+  bool swActive() const { return _sw_run || _sw_acc > 0; }   // running or stopped on a time
+  bool timerRunning() const { return _mode == RUN; }
+  unsigned long timerLeft() const {
+    long left = (long)(_end - millis());
+    return left > 0 ? (unsigned long)left : 0UL;
+  }
+  // the screen stays lit while something counts; a stopped stopwatch may go dark
+  bool keepsAwake() const { return _mode != SW || _sw_run; }
+
+  // six clicks: a running timer or a stopwatch with a time is shown, otherwise a fresh stopwatch starts
   void open() {
     if (_mode == RUN || _mode == DONE) return;
-    if (_mode == SW && _sw_keep) return;
     _mode = SW;
+    if (swActive()) return;
+    _sw_acc = 0;
+    _sw_split = false;
     _sw_start = millis();
+    _sw_run = true;
   }
-  bool counting() const { return _mode == SW && _sw_keep; }
 
 #ifdef UI_MSG_TICKER
   // sport view: MM:SS in dots with the milliseconds next to it in smaller dots
@@ -2501,27 +2524,43 @@ public:
     int wait = 1000;
     switch (_mode) {
       case SW: {
-        unsigned long ms = now - _sw_start;
+        unsigned long ms = _sw_split ? _sw_split_ms : swElapsed();
         fmt(t, ms / 1000UL);
-        title = ru ? "Секундомер" : "Stopwatch";
-        hint = ru ? "2х фон, держ. таймер" : "2x: keep  hold: timer";
+        // the hint takes turns: what the presses do now, then how to leave
+        bool exit_hint = ((now / 3000UL) % 2UL) == 1UL;
+        if (!_sw_run) {
+          title = ru ? "Стоп" : "Stopped";
+          hint = exit_hint ? (ru ? "3х выход, держ. таймер" : "3x exit  hold: timer")
+                           : (ru ? "1х пуск  2х сброс" : "1x go  2x reset");
+        } else if (_sw_split) {
+          title = ru ? "Круг" : "Split";
+          hint = exit_hint ? (ru ? "3х выход, счёт идёт" : "3x exit, keeps going")
+                           : (ru ? "1х стоп  2х снять круг" : "1x stop  2x release");
+        } else {
+          title = ru ? "Секундомер" : "Stopwatch";
+          hint = exit_hint ? (ru ? "3х выход, счёт идёт" : "3x exit, keeps going")
+                           : (ru ? "1х стоп  2х круг" : "1x stop  2x split");
+        }
+        int hint_wait = 3000 - (int)(now % 3000UL);
+        bool moving = _sw_run && !_sw_split;
 #ifdef UI_MSG_TICKER
         if (!eink && _task->swSport()) {
           display.drawTextLeftAlign(0, 0, title);
           display.drawTextCentered(W / 2, H - 9, hint);
           drawSport(display, t, ms, band);
           display.markFull();
-          return 47;   // milliseconds keep running
+          return moving ? 47 : hint_wait;   // milliseconds keep running
         }
 #endif
         if (!eink) {   // tenths in the top-right corner
           char d[4];
           sprintf(d, ".%lu", (ms / 100UL) % 10UL);
           display.drawTextRightAlign(W - 1, 0, d);
-          wait = 100 - (int)(ms % 100UL);
+          wait = moving ? 100 - (int)(ms % 100UL) : hint_wait;
         } else {
-          wait = 1000 - (int)(ms % 1000UL);
+          wait = moving ? 1000 - (int)(ms % 1000UL) : hint_wait;
         }
+        if (wait > hint_wait) wait = hint_wait;
         break;
       }
       case SET:
@@ -2554,13 +2593,32 @@ public:
   }
 
   bool handleInput(char c) override {
+    bool ru = _task->langRu();
     switch (_mode) {
       case SW:
-        if (c == KEY_ENTER) { _mode = SET; _minutes = 1; _sw_keep = false; return true; }
-        // double click: leave, the stopwatch keeps counting (six clicks bring it back);
-        // a press or anything else: leave and stop it
-        _sw_keep = (c == KEY_PREV || c == KEY_LEFT);
-        if (_sw_keep) _task->showAlert(_task->langRu() ? "Секундомер идёт" : "Stopwatch runs", 900);
+        if (c == KEY_NEXT || c == KEY_RIGHT) {   // press: stop / go on
+          if (_sw_run) {
+            _sw_acc = swElapsed();
+            _sw_run = false;
+            _sw_split = false;
+          } else {
+            _sw_start = millis();
+            _sw_run = true;
+          }
+          return true;
+        }
+        if (c == KEY_PREV || c == KEY_LEFT) {    // double: split / release, or reset when stopped
+          if (_sw_run) {
+            _sw_split = !_sw_split;
+            if (_sw_split) _sw_split_ms = swElapsed();
+          } else {
+            _sw_acc = 0;
+          }
+          return true;
+        }
+        if (c == KEY_ENTER) { _mode = SET; _minutes = 1; return true; }   // the stopwatch keeps its time
+        // triple / quad: leave; a running stopwatch keeps counting, a stopped one keeps its time
+        if (_sw_run) _task->showAlert(ru ? "Секундомер идёт" : "Stopwatch runs", 900);
         _task->gotoHomeScreen();
         return true;
       case SET:
@@ -2587,6 +2645,115 @@ public:
         _task->gotoHomeScreen();
         return true;
     }
+  }
+};
+
+// Time at a glance: four clicks on the menu pages (not Beacon, where four
+// stop the beacon). Weekday and date on top, HH:MM:SS big in the middle, a
+// line below for the stopwatch and one for the timer while they count or hold
+// a time. Hold - open the stopwatch / timer (when there is one), any other
+// press or 15 s without presses - back to the same menu page.
+#ifndef GLANCE_MILLIS
+  #define GLANCE_MILLIS 15000UL
+#endif
+class GlanceScreen : public UIScreen {
+  UITask* _task;
+  mesh::RTCClock* _rtc;
+  NodePrefs* _prefs;
+  TimerScreen* _sw;
+  unsigned long _opened = 0;
+public:
+  GlanceScreen(UITask* task, mesh::RTCClock* rtc, NodePrefs* prefs, TimerScreen* sw)
+    : _task(task), _rtc(rtc), _prefs(prefs), _sw(sw) {}
+
+  void open() { _opened = millis(); }
+
+  void poll() override {
+    if ((long)(millis() - _opened) >= (long)GLANCE_MILLIS) _task->gotoHomeScreen();
+  }
+
+  int render(DisplayDriver& display) override {
+    bool ru = _task->langRu();
+    bool eink = _task->isEink();
+    int fw = display.frameWidth(), fh = display.frameHeight();
+    int W = display.width(), H = display.height();
+    int band = (9 * fh + H - 1) / H;
+    display.setColor(UIColor::primary_txt);
+    display.setTextSize(1);
+
+    uint32_t now = _rtc->getCurrentTime();
+    bool valid = now >= 1000000000UL;
+    int64_t local = (int64_t)now + (int64_t)(_prefs ? _prefs->tz_offset_mins : 0) * 60;
+    if (local < 0) local = 0;
+    uint32_t lt = (uint32_t)local;
+    char buf[32];
+
+    // top row: weekday and date left, battery right
+    if (valid) {
+      int year, month, day, wday;
+      clockYmdFromUnix(lt, year, month, day, wday);
+      static const char* wd_en[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+      static const char* wd_ru[] = {"Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"};
+      sprintf(buf, "%s %02d.%02d.%04d", ru ? wd_ru[wday] : wd_en[wday], day, month, year);
+      display.drawTextLeftAlign(0, 0, buf);
+    } else {
+      display.drawTextLeftAlign(0, 0, ru ? "время не задано" : "no time set");
+    }
+    int mv = _task->getBattMilliVolts();
+    if (mv > 0) {
+      int pct = (mv - BATT_MIN_MILLIVOLTS) * 100 / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
+      if (pct < 0) pct = 0;
+      if (pct > 100) pct = 100;
+      sprintf(buf, "%d%%", pct);
+      display.drawTextRightAlign(W - 1, 0, buf);
+    }
+
+    // bottom rows: stopwatch and timer, when there are any
+    int rows = 0;
+    bool fast = false;
+    if (_sw && _sw->timerRunning()) {
+      char t[12];
+      TimerScreen::fmt(t, (_sw->timerLeft() + 999UL) / 1000UL);
+      sprintf(buf, ru ? "Таймер  %s" : "Timer  %s", t);
+      rows++;
+      display.drawTextCentered(W / 2, H - 9 * rows, buf);
+      fast = true;
+    }
+    if (_sw && _sw->swActive()) {
+      char t[12];
+      TimerScreen::fmt(t, _sw->swElapsed() / 1000UL);
+      const char* state = !_sw->swRunning() ? (ru ? " стоп" : " stop") : "";
+      sprintf(buf, ru ? "Секундомер  %s%s" : "Stopwatch  %s%s", t, state);
+      rows++;
+      display.drawTextCentered(W / 2, H - 9 * rows, buf);
+      if (_sw->swRunning()) fast = true;
+    }
+
+    // the clock: HH:MM:SS (HH:MM on e-ink), as big as fits between the rows
+    char t[10];
+    uint32_t hh = (lt / 3600UL) % 24UL, mm = (lt / 60UL) % 60UL, ss = lt % 60UL;
+    if (!valid) strcpy(t, eink ? "--:--" : "--:--:--");
+    else if (eink) sprintf(t, "%02lu:%02lu", (unsigned long)hh, (unsigned long)mm);
+    else sprintf(t, "%02lu:%02lu:%02lu", (unsigned long)hh, (unsigned long)mm, (unsigned long)ss);
+    int bottom = rows > 0 ? (9 * rows * fh + H - 1) / H : band;
+    int area = fh - band - bottom;
+    const ClockFace& face = bigFace(t, fw - 2, area);
+    ClockGlyph g0;
+    clockFind(face, '0', g0);
+    bigDraw(display, face, (fw - bigInkWidth(face, t)) / 2, band + (area - g0.h) / 2, t);
+    display.markFull();
+
+    if (eink) return fast ? 5000 : 30000;
+    return 1000 - (int)(millis() % 1000UL);
+  }
+
+  bool handleInput(char c) override {
+    if (c == KEY_ENTER && _sw && (_sw->swActive() || _sw->timerRunning())) {
+      _task->openStopwatch();
+      return true;
+    }
+    _task->gotoHomeScreen();
+    return true;
   }
 };
 
@@ -2754,6 +2921,12 @@ void UITask::openStopwatch() {
   setCurrScreen(stopwatch);
 }
 
+void UITask::openGlance() {
+  if (!glance) return;
+  ((GlanceScreen*)glance)->open();
+  setCurrScreen(glance);
+}
+
 void UITask::openBadge() {
 #ifdef UI_MSG_TICKER
   if (!badge) return;
@@ -2815,6 +2988,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   clock = (display != NULL && display->isEink())
       ? new ClockScreen(this, &rtc_clock, (MsgPreviewScreen*)msg_preview, node_prefs) : NULL;
   stopwatch = display != NULL ? new TimerScreen(this) : NULL;
+  glance = stopwatch != NULL ? new GlanceScreen(this, &rtc_clock, node_prefs, (TimerScreen*)stopwatch) : NULL;
 #ifdef UI_MSG_TICKER
   badge = display != NULL ? new BadgeScreen(this) : NULL;
 #endif
@@ -2951,7 +3125,7 @@ void UITask::msgRead(int msgcount) {
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
   // an open message window stays open: only button presses read it
-  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch() && !inBadge() && !inGames() && !inSos()) {
+  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch() && !inGlance() && !inBadge() && !inGames() && !inSos()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -3234,7 +3408,7 @@ void UITask::loop() {
       setCurrScreen(stopwatch);
       if (!_display->isOn()) _display->turnOn();
     }
-    if (curr == stopwatch || curr == games || inBadge()) _auto_off = millis() + AUTO_OFF_MILLIS;   // counting / playing / badge stays in view
+    if ((curr == stopwatch && ((TimerScreen*)stopwatch)->keepsAwake()) || curr == games || inBadge()) _auto_off = millis() + AUTO_OFF_MILLIS;   // counting / playing / badge stays in view
   }
 
   if (_display != NULL && _display->isOn()) {
@@ -3333,7 +3507,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inSos()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGlance() || inBadge() || inGames() || inSos()) return c;
   return 0;
 }
 
@@ -3359,7 +3533,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inSos()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGlance() || inBadge() || inGames() || inSos()) return c;
   toggleBuzzer();
   return 0;
 }

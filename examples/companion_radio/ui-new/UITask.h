@@ -55,6 +55,7 @@ class UITask : public AbstractUITask {
   UIScreen* clock;
   UIScreen* charge_clock;   // big clock on the charger (non-e-ink)
   UIScreen* stopwatch;      // stopwatch and timer: six clicks
+  UIScreen* glance;         // time at a glance: four clicks on the menu pages
   UIScreen* badge;          // badge line: ten clicks
   UIScreen* games;          // Games page: Runner, Tower, Snake
   UIScreen* sos;            // SOS: 5 s hold
@@ -91,6 +92,7 @@ public:
     clock = NULL;
     charge_clock = NULL;
     stopwatch = NULL;
+    glance = NULL;
     badge = NULL;
     games = NULL;
     sos = NULL;
@@ -114,6 +116,8 @@ public:
   bool inRelays() const { return curr != NULL && curr == relays; }
   void openStopwatch();
   bool inStopwatch() const { return curr != NULL && curr == stopwatch; }
+  void openGlance();
+  bool inGlance() const { return curr != NULL && curr == glance; }
   void openBadge();
   bool inBadge() const { return curr != NULL && curr == badge; }
   void openGames();
