@@ -310,7 +310,7 @@ class HomeScreen : public UIScreen {
 #ifdef UI_MSG_TICKER
     TICKER,  // running line on/off, right before hibernate
 #endif
-    GAMES,   // Runner, Tower, Snake; not on e-ink
+    GAMES,   // Runner, Tower, Snake, Blocks, Raid; not on e-ink
     SHUTDOWN,
     Count    // keep as last
   };
@@ -1354,9 +1354,10 @@ public:
     } else if (_page == HomePage::GAMES) {
       display.setTextSize(1);
       display.setColor(UIColor::primary_txt);
-      display.drawTextCentered(display.width() / 2, 20, "Runner  Tower  Snake");
+      display.drawTextCentered(display.width() / 2, 16, "Runner Tower Snake");
+      display.drawTextCentered(display.width() / 2, 26, "Blocks  Raid");
       display.setColor(UIColor::secondary_txt);
-      display.drawTextCentered(display.width() / 2, 34, "one button games");
+      display.drawTextCentered(display.width() / 2, 38, "one button games");
       display.drawTextCentered(display.width() / 2, 64 - 11, "games: " PRESS_LABEL);
     } else if (_page == HomePage::SHUTDOWN) {
       display.setColor(UIColor::corp_blue);

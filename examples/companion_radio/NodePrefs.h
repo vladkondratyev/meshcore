@@ -80,7 +80,7 @@ public:
   uint8_t auto_caps = 1;         // 1 = a capital at the start and after . ! ?
   uint8_t auto_cursor = 0;       // 1 = after a letter the keyboard cursor moves to the likely next one
   uint8_t sos_chan = 0;          // SOS goes to this channel (and to every favourite contact)
-  uint16_t game_best[3] = {0, 0, 0};   // Games page records: Runner, Tower, Snake
+  uint16_t game_best[5] = {0, 0, 0, 0, 0};   // Games page records: Runner, Tower, Snake, Blocks, Raid
   uint8_t sw_sport = 0;          // 1 = the stopwatch shows milliseconds next to the seconds
   uint8_t charge_clock = 0;      // 1 = big clock instead of a dark screen (on the charger, or always where power can't be sensed)
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
@@ -184,6 +184,8 @@ private:
       def("gb_run", _parent->game_best[0]);  // game records
       def("gb_tow", _parent->game_best[1]);
       def("gb_snk", _parent->game_best[2]);
+      def("gb_blk", _parent->game_best[3]);
+      def("gb_raid", _parent->game_best[4]);
       def("tvalid", _parent->time_valid);
       for (int i = 0; i < CLOCK_NODE_MAX; i++) {
         char key[8];
