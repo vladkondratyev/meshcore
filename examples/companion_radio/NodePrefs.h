@@ -88,6 +88,11 @@ public:
   uint8_t night_to = 7;          // quiet hours end, local hour
   uint8_t alarm_on = 0;          // 1 = the alarm rings every day at alarm_min
   uint16_t alarm_min = 7 * 60;   // alarm time, minutes after local midnight
+  uint8_t track_state = 0;       // GPS track: 0 off, 1 recording, 2 paused (survives a reboot)
+  uint8_t track_n = 0;           // the track being recorded
+  uint16_t track_step = 20;      // metres between track points
+  char wifi_ssid[33] = "";       // WiFi builds: the network to join ("" = the one built in)
+  char wifi_pwd[65] = "";
   uint8_t charge_clock = 0;      // 1 = big clock instead of a dark screen (on the charger, or always where power can't be sensed)
   uint8_t time_valid = 0;        // 1 once GPS, phone, manual set, or a trusted node has set the clock
   uint8_t clock_nodes[CLOCK_NODE_MAX][32];  // pubkeys to poll for time; empty slots are zeros
@@ -192,6 +197,11 @@ private:
       def("ngt_t", _parent->night_to);
       def("alm", _parent->alarm_on);        // alarm clock
       def("alm_m", _parent->alarm_min);
+      def("trk", _parent->track_state);     // GPS track
+      def("trk_n", _parent->track_n);
+      def("trk_st", _parent->track_step);
+      def("wf_ssid", _parent->wifi_ssid, sizeof(_parent->wifi_ssid));
+      def("wf_pwd", _parent->wifi_pwd, sizeof(_parent->wifi_pwd));
       def("sos_ch", _parent->sos_chan);
       def("gb_run", _parent->game_best[0]);  // game records
       def("gb_tow", _parent->game_best[1]);

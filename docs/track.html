@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshCore Треки</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--mute:#6b7385;--line:#e2e5ea;--acc:#2563eb;--acc2:#e0e9ff;--rec:#dc2626;--trk:#e11d48}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--fg:#e6e9ef;--mute:#9aa3b5;--line:#2b3240;--acc:#6b9bff;--acc2:#1e2a44;--rec:#f87171;--trk:#fb7185}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{font-size:17px;margin:0;font-weight:650}
+#status{color:var(--mute);font-size:13px;flex:1;min-width:160px}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+button:disabled{opacity:.5;cursor:default}
+main{display:grid;grid-template-columns:340px 1fr;gap:12px;padding:12px 16px;max-width:1400px;margin:0 auto}
+@media (max-width:820px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.card h2{font-size:14px;margin:0 0 8px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+#list{display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow:auto}
+.trk{border:1px solid var(--line);border-radius:10px;padding:8px 10px;cursor:pointer}
+.trk:hover{border-color:var(--acc)}
+.trk.sel{border-color:var(--acc);background:var(--acc2)}
+.trk .t{display:flex;justify-content:space-between;gap:8px;font-weight:600}
+.trk .s{color:var(--mute);font-size:13px}
+.rec{color:var(--rec);font-weight:700}
+#map{height:60vh;min-height:320px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
+#stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:12px}
+.st{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.st b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+.st span{color:var(--mute);font-size:12px}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.note{color:var(--mute);font-size:13px;margin:6px 0 0}
+#ctl{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>MeshCore · Треки</h1>
+  <div id="status">Не подключено</div>
+  <button id="connect" class="pri">Подключить по USB</button>
+  <button id="refresh" disabled>Обновить</button>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Треки на устройстве</h2>
+      <div id="list"><p class="note" id="hint">Подключите устройство: кабелем USB (Chrome или Edge на компьютере, прошивка BLE) или откройте эту страницу по адресу устройства в WiFi.</p></div>
+      <div class="row">
+        <button id="allgpx" disabled>Все треки в GPX</button>
+      </div>
+    </div>
+    <div class="card" id="ctl" style="margin-top:12px">
+      <h2>Запись</h2>
+      <div id="recstate" class="note"></div>
+      <div class="row">
+        <button data-c="start">Старт</button>
+        <button data-c="pause">Пауза</button>
+        <button data-c="resume">Дальше</button>
+        <button data-c="stop">Стоп</button>
+      </div>
+    </div>
+  </section>
+  <section>
+    <div id="map"></div>
+    <div id="stats"></div>
+    <div class="row" id="exp" style="display:none">
+      <button data-f="gpx" class="pri">GPX</button>
+      <button data-f="kml">KML</button>
+      <button data-f="geojson">GeoJSON</button>
+      <button data-f="csv">CSV</button>
+      <button id="del">Удалить трек</button>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const statusEl = $('#status');
+  let src = null;          // {cmd(text) -> Promise<lines>}
+  let tracks = [], tz = 0, recState = 0, cur = null, curPts = null;
+
+  // ---------- sources ----------
+  // the device's own web server (WiFi builds)
+  const httpSource = {
+    name: 'WiFi',
+    async run(cmd) {
+      let url;
+      if (cmd === 'track raw') url = '/api/raw';
+      else if (cmd.startsWith('track get ')) url = '/api/get?n=' + cmd.slice(10);
+      else if (cmd.startsWith('track del ')) url = '/api/del?n=' + cmd.slice(10);
+      else url = '/api/cmd?c=' + cmd.slice(6);
+      const r = await fetch(url, {cache: 'no-store'});
+      return (await r.text()).split('\n');
+    }
+  };
+
+  // USB: the console on the device's USB port (Web Serial)
+  function serialSource(port) {
+    let buf = '', waiter = null;
+    const lines = [];
+    const dec = new TextDecoderStream();
+    port.readable.pipeTo(dec.writable).catch(() => {});
+    const rd = dec.readable.getReader();
+    (async () => {
+      try {
+        for (;;) {
+          const {value, done} = await rd.read();
+          if (done) break;
+          buf += value;
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const l = buf.slice(0, i).replace(/\r$/, '');
+            buf = buf.slice(i + 1);
+            lines.push(l);
+            if (waiter) waiter();
+          }
+        }
+      } catch (e) { setStatus('USB: связь потеряна'); }
+    })();
+    const enc = new TextEncoder();
+    let busy = Promise.resolve();
+    async function run(cmd, until) {
+      lines.length = 0;
+      const w = port.writable.getWriter();
+      await w.write(enc.encode(cmd + '\r'));
+      w.releaseLock();
+      const out = [];
+      const t0 = Date.now();
+      for (;;) {
+        while (lines.length) {
+          const l = lines.shift();
+          out.push(l);
+          if (until(l)) return out;
+        }
+        if (Date.now() - t0 > 60000) throw new Error('нет ответа');
+        await new Promise(r => { waiter = r; setTimeout(r, until.quiet ? 600 : 1000); });
+        waiter = null;
+        if (until.quiet && !lines.length && out.length) return out;
+      }
+    }
+    return {
+      name: 'USB',
+      run(cmd) {
+        let until;
+        if (cmd === 'track raw') until = l => l.startsWith('TLEND');
+        else if (cmd.startsWith('track get ')) until = l => l.startsWith('END,') || l.startsWith('ERR');
+        else { until = l => l.startsWith('  >') || l.startsWith('  Error'); }
+        const p = busy.then(() => run(cmd, until));
+        busy = p.catch(() => {});
+        return p;
+      }
+    };
+  }
+
+  function setStatus(t) { statusEl.textContent = t; }
+
+  // ---------- data ----------
+  function parseList(lines) {
+    tracks = [];
+    for (const l of lines) {
+      const f = l.split(',');
+      if (f[0] === 'TL') tracks.push({n: +f[1], start: +f[2], end: +f[3], pts: +f[4], dist: +f[5], moving: +f[6], rec: f[7] === '1'});
+      if (f[0] === 'TLEND') { tz = +f[1] || 0; recState = +f[2] || 0; }
+    }
+    tracks.sort((a, b) => b.start - a.start);
+  }
+  function parseTrack(lines) {
+    const segs = [];
+    let seg = null;
+    for (const l of lines) {
+      if (l === 'S') { seg = []; segs.push(seg); continue; }
+      const f = l.split(',');
+      if (f[0] === 'P') {
+        if (!seg) { seg = []; segs.push(seg); }
+        seg.push({t: +f[1], lat: +f[2] / 1e5, lon: +f[3] / 1e5});
+      }
+    }
+    return segs.filter(s => s.length);
+  }
+  const R = 6371000, rad = d => d * Math.PI / 180;
+  function dist(a, b) {
+    const x = rad(b.lon - a.lon) * Math.cos(rad((a.lat + b.lat) / 2)), y = rad(b.lat - a.lat);
+    return Math.sqrt(x * x + y * y) * R;
+  }
+  function stats(segs) {
+    let d = 0, mov = 0, vmax = 0, n = 0, t0 = Infinity, t1 = 0;
+    for (const s of segs) {
+      for (let i = 0; i < s.length; i++) {
+        n++; t0 = Math.min(t0, s[i].t); t1 = Math.max(t1, s[i].t);
+        if (i) {
+          const dd = dist(s[i - 1], s[i]), dt = s[i].t - s[i - 1].t;
+          d += dd;
+          if (dt > 0 && dt <= 600) { mov += dt; if (dt >= 5) vmax = Math.max(vmax, dd / dt); }
+        }
+      }
+    }
+    return {d, mov, vmax, n, t0, t1};
+  }
+
+  // ---------- formatting ----------
+  const pad = n => String(n).padStart(2, '0');
+  function localDate(ts) { return new Date((ts + tz * 60) * 1000); }   // the device's time zone
+  function fmtDate(ts) { const d = localDate(ts); return `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; }
+  function fmtDur(s) { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return h ? `${h} ч ${pad(m)} мин` : `${m} мин`; }
+  function fmtKm(m) { return m >= 1000 ? (m / 1000).toFixed(2) + ' км' : Math.round(m) + ' м'; }
+  const iso = ts => new Date(ts * 1000).toISOString().replace('.000', '');
+  const esc = s => s.replace(/[<&>"]/g, c => ({'<': '&lt;', '&': '&amp;', '>': '&gt;', '"': '&quot;'}[c]));
+
+  // ---------- map ----------
+  let map = null, layer = null;
+  function initMap() {
+    if (map || !window.L) return;
+    map = L.map('map', {zoomControl: true}).setView([55.75, 37.6], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap'}).addTo(map);
+  }
+  function drawTrack(segs) {
+    const el = $('#map');
+    if (window.L) {
+      initMap();
+      if (layer) layer.remove();
+      layer = L.featureGroup();
+      const col = getComputedStyle(document.documentElement).getPropertyValue('--trk').trim() || '#e11d48';
+      for (const s of segs) L.polyline(s.map(p => [p.lat, p.lon]), {color: col, weight: 4, opacity: .9}).addTo(layer);
+      const all = segs.flat();
+      if (all.length) {
+        L.circleMarker([all[0].lat, all[0].lon], {radius: 7, color: '#16a34a', fillOpacity: 1}).bindTooltip('Старт').addTo(layer);
+        const e = all[all.length - 1];
+        L.circleMarker([e.lat, e.lon], {radius: 7, color: '#111827', fillOpacity: 1}).bindTooltip('Финиш').addTo(layer);
+        layer.addTo(map);
+        map.fitBounds(layer.getBounds(), {padding: [24, 24]});
+      }
+      return;
+    }
+    // no map library (no internet): the line on its own
+    const all = segs.flat();
+    if (!all.length) { el.innerHTML = ''; return; }
+    let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
+    for (const p of all) { a = Math.min(a, p.lon); b = Math.max(b, p.lon); c = Math.min(c, p.lat); d = Math.max(d, p.lat); }
+    const k = Math.cos(rad((c + d) / 2)), w = (b - a) * k || 1e-6, h = (d - c) || 1e-6, s = 1000 / Math.max(w, h);
+    const path = segs.map(sg => 'M' + sg.map(p => `${((p.lon - a) * k * s).toFixed(1)},${((d - p.lat) * s).toFixed(1)}`).join('L')).join('');
+    el.innerHTML = `<svg viewBox="-20 -20 ${w * s + 40} ${h * s + 40}" style="width:100%;height:100%"><path d="${path}" fill="none" stroke="var(--trk)" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+
+  // ---------- UI ----------
+  function renderList() {
+    const el = $('#list');
+    el.innerHTML = '';
+    if (!tracks.length) { el.innerHTML = '<p class="note">Треков пока нет. Запись: страница Track на устройстве (удержание) или кнопка «Старт».</p>'; }
+    for (const t of tracks) {
+      const div = document.createElement('div');
+      div.className = 'trk' + (cur && cur.n === t.n ? ' sel' : '');
+      div.innerHTML = `<div class="t"><span>№${t.n} · ${fmtDate(t.start)}</span>${t.rec ? '<span class="rec">● запись</span>' : ''}</div>
+        <div class="s">${fmtKm(t.dist)} · ${fmtDur(t.moving)} в движении · ${t.pts} точек</div>`;
+      div.onclick = () => openTrack(t);
+      el.appendChild(div);
+    }
+    $('#allgpx').disabled = !tracks.length;
+    const ctl = $('#ctl');
+    ctl.style.display = 'block';
+    $('#recstate').textContent = ['Запись выключена', 'Идёт запись', 'Пауза'][recState] || '';
+  }
+  async function loadList() {
+    setStatus(`${src.name}: читаю список…`);
+    parseList(await src.run('track raw'));
+    renderList();
+    setStatus(`${src.name}: ${tracks.length} трек(ов)`);
+  }
+  async function getTrack(n) { return parseTrack(await src.run('track get ' + n)); }
+  async function openTrack(t) {
+    cur = t; renderList();
+    setStatus(`${src.name}: загружаю трек №${t.n}…`);
+    curPts = await getTrack(t.n);
+    drawTrack(curPts);
+    const s = stats(curPts);
+    const box = (v, l) => `<div class="st"><b>${v}</b><span>${l}</span></div>`;
+    $('#stats').innerHTML = box(fmtKm(s.d), 'расстояние') + box(fmtDur(s.mov), 'в движении') + box(fmtDur(s.t1 - s.t0), 'всего') +
+      box(s.mov ? (s.d / s.mov * 3.6).toFixed(1) + ' км/ч' : '—', 'средняя') + box((s.vmax * 3.6).toFixed(1) + ' км/ч', 'макс.') + box(s.n, 'точек');
+    $('#exp').style.display = 'flex';
+    setStatus(`${src.name}: трек №${t.n}, ${s.n} точек`);
+  }
+
+  // ---------- export ----------
+  const name = t => `meshcore-track-${t.n}-${fmtDate(t.start).replace(/[ :.]/g, '-')}`;
+  function gpxTrk(t, segs) {
+    return `<trk><name>${esc('MeshCore №' + t.n + ' ' + fmtDate(t.start))}</name>` +
+      segs.map(s => '<trkseg>' + s.map(p => `<trkpt lat="${p.lat.toFixed(5)}" lon="${p.lon.toFixed(5)}"><time>${iso(p.t)}</time></trkpt>`).join('') + '</trkseg>').join('') + '</trk>';
+  }
+  const gpxWrap = body => `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="MeshCore" xmlns="http://www.topografix.com/GPX/1/1">${body}</gpx>\n`;
+  function exportAs(f, t, segs) {
+    let data, type, ext = f;
+    if (f === 'gpx') { data = gpxWrap(gpxTrk(t, segs)); type = 'application/gpx+xml'; }
+    else if (f === 'kml') {
+      data = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${esc('MeshCore №' + t.n)}</name><Placemark><name>${esc(fmtDate(t.start))}</name><Style><LineStyle><color>ff3c1ee1</color><width>4</width></LineStyle></Style><MultiGeometry>` +
+        segs.map(s => '<LineString><tessellate>1</tessellate><coordinates>' + s.map(p => `${p.lon.toFixed(5)},${p.lat.toFixed(5)},0`).join(' ') + '</coordinates></LineString>').join('') +
+        '</MultiGeometry></Placemark></Document></kml>\n';
+      type = 'application/vnd.google-earth.kml+xml';
+    } else if (f === 'geojson') {
+      data = JSON.stringify({type: 'Feature', properties: {name: 'MeshCore ' + t.n, start: iso(t.start), coordTimes: segs.map(s => s.map(p => iso(p.t)))},
+        geometry: {type: 'MultiLineString', coordinates: segs.map(s => s.map(p => [+p.lon.toFixed(5), +p.lat.toFixed(5)]))}});
+      type = 'application/geo+json';
+    } else {
+      data = 'segment,time,lat,lon\n' + segs.map((s, i) => s.map(p => `${i + 1},${iso(p.t)},${p.lat.toFixed(5)},${p.lon.toFixed(5)}`).join('\n')).join('\n') + '\n';
+      type = 'text/csv';
+    }
+    save(name(t) + '.' + ext, data, type);
+  }
+  function save(fn, data, type) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([data], {type}));
+    a.download = fn;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  // ---------- wiring ----------
+  async function start(s) {
+    src = s;
+    $('#refresh').disabled = false;
+    $('#connect').style.display = s === httpSource ? 'none' : '';
+    try {
+      await loadList();
+      if (tracks.length) await openTrack(tracks[0]);   // the newest one right away
+    } catch (e) { setStatus(`${s.name}: ошибка — ${e.message}`); }
+  }
+  $('#connect').onclick = async () => {
+    if (!('serial' in navigator)) { setStatus('Этот браузер не умеет USB: нужен Chrome или Edge на компьютере'); return; }
+    try {
+      const port = await navigator.serial.requestPort();
+      await port.open({baudRate: 115200});
+      await start(serialSource(port));
+      $('#connect').textContent = 'Подключено';
+      $('#connect').disabled = true;
+    } catch (e) { setStatus('USB: ' + e.message); }
+  };
+  $('#refresh').onclick = () => src && loadList().catch(e => setStatus('Ошибка: ' + e.message));
+  document.querySelectorAll('#exp [data-f]').forEach(b => b.onclick = () => cur && curPts && exportAs(b.dataset.f, cur, curPts));
+  $('#del').onclick = async () => {
+    if (!cur || !confirm(`Удалить трек №${cur.n} с устройства?`)) return;
+    await src.run('track del ' + cur.n);
+    cur = null; curPts = null; $('#exp').style.display = 'none'; $('#stats').innerHTML = '';
+    if (layer) layer.remove();
+    await loadList();
+  };
+  document.querySelectorAll('#ctl [data-c]').forEach(b => b.onclick = async () => {
+    await src.run('track ' + b.dataset.c);
+    await loadList();
+  });
+  $('#allgpx').onclick = async () => {
+    let body = '';
+    for (const t of [...tracks].reverse()) { setStatus(`${src.name}: трек №${t.n}…`); body += gpxTrk(t, await getTrack(t.n)); }
+    save('meshcore-tracks.gpx', gpxWrap(body), 'application/gpx+xml');
+    setStatus(`${src.name}: выгружено ${tracks.length} трек(ов)`);
+  };
+
+  initMap();
+  // opened from the device itself (WiFi build): read the tracks right away
+  if (location.protocol.startsWith('http') && !/github\.io$|localhost$/.test(location.hostname)) {
+    fetch('/api/raw', {cache: 'no-store'}).then(r => r.ok ? r.text() : Promise.reject()).then(t => {
+      if (t.includes('TLEND')) start(httpSource);
+    }).catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>

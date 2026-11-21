@@ -5,6 +5,9 @@
 #endif
 
 #include <Arduino.h> // needed for PlatformIO
+#ifdef WIFI_SSID
+  #include <WiFi.h>
+#endif
 #include <Mesh.h>
 
 static const uint8_t CONSOLE_PUB_KEY[PUB_KEY_SIZE] = { 'M','C','-','C','L','I' };
@@ -367,6 +370,204 @@ uint8_t MyMesh::uiPingState() const {
   if (_ui_ack != 0 && !_ui_ack_ok && _ui_try + 1 >= UI_SEND_ATTEMPTS && millisHasNowPassed(_ui_ack_until)) return PING_LOST;
   if (_ui_ack == 0 && !_ui_ack_ok) return PING_LOST;   // another message from the device took over
   return PING_WAIT;
+}
+
+// ---- GPS track ----
+#ifndef TRK_CONTACT_BYTES
+  #define TRK_CONTACT_BYTES 152   // one contact in the contacts file
+#endif
+
+// bytes the tracks may still take: the free space minus what a full contact
+// list and some slack need
+long MyMesh::trackRoom() {
+  long free_b = ((long)_store->getStorageTotalKb() - (long)_store->getStorageUsedKb()) * 1024L;
+#if defined(ESP32)
+  long reserve = 64L * 1024L;
+#else
+  int missing = MAX_CONTACTS - getNumContacts();
+  if (missing < 0) missing = 0;
+  long reserve = (long)missing * TRK_CONTACT_BYTES + 8L * 1024L;   // two blocks of slack
+#endif
+  return free_b - reserve;
+}
+
+void MyMesh::trackMakeRoom() {
+  long room = trackRoom();
+  while (room < 4096L) {
+    uint8_t o = _track.oldest();
+    if (o == 0 || !_track.remove(o)) break;
+    room = trackRoom();
+  }
+  _track_full = room < 1024L;
+}
+
+uint8_t MyMesh::trackStart() {
+#if ENV_INCLUDE_GPS == 1
+  if (!_prefs.gps_enabled) {
+    _prefs.gps_enabled = 1;
+    sensors.setSettingValue("gps", "1");
+  }
+#endif
+  trackMakeRoom();
+  uint32_t now = getRTCClock()->getCurrentTime();
+  uint8_t n = _track.start(now);
+  if (n == 0) {   // every number taken: the oldest goes
+    uint8_t o = _track.oldest();
+    if (o) _track.remove(o);
+    n = _track.start(now);
+  }
+  if (n == 0 || _track_full) { if (n) _track.stop(); _prefs.track_state = 0; savePrefs(); return 0; }
+  _prefs.track_state = 1;
+  _prefs.track_n = n;
+  savePrefs();
+  return n;
+}
+
+void MyMesh::trackPause() {
+  _track.pause();
+  _prefs.track_state = _track.state() == TrackLog::PAUSED ? 2 : _prefs.track_state;
+  savePrefs();
+}
+
+void MyMesh::trackResume() {
+  _track.resume();
+  if (_track.state() == TrackLog::REC) { _prefs.track_state = 1; savePrefs(); }
+}
+
+void MyMesh::trackStop() {
+  _track.stop();
+  _prefs.track_state = 0;
+  savePrefs();
+}
+
+void MyMesh::trackLoop() {
+  if (_track.state() == TrackLog::OFF) return;
+  if (!millisHasNowPassed(_trk_next)) return;
+  _trk_next = futureMillis(1000);
+  if (_track.state() == TrackLog::REC && _prefs.gps_enabled) {
+    LocationProvider* loc = sensors.getLocationProvider();
+    if (loc != NULL && loc->isValid()) {
+      uint32_t now = getRTCClock()->getCurrentTime();
+      _track.onFix(now, (int32_t)(loc->getLatitude() / 10), (int32_t)(loc->getLongitude() / 10));
+    }
+  }
+  if (millisHasNowPassed(_trk_room_next)) {   // keep room for the contacts
+    _trk_room_next = futureMillis(30000);
+    trackMakeRoom();
+    if (_track_full) {
+      trackStop();
+#ifdef DISPLAY_CLASS
+      if (_ui) _ui->notify(UIEventType::ack);
+#endif
+      return;
+    }
+  }
+  if (_track.flushDue()) _track.flush();
+}
+
+// console: track [start|pause|resume|stop|list|del N|all|raw|get N]
+void MyMesh::trackCommand(const char* arg, Print& out) {
+  char line[96];
+  while (*arg == ' ') arg++;
+  if (*arg == 0) {
+    const char* st = _track.state() == TrackLog::REC ? "recording" : _track.state() == TrackLog::PAUSED ? "paused" : "off";
+    if (_track.state() != TrackLog::OFF) {
+      snprintf(line, sizeof(line), "  > track %s #%u: %lu m, %lu pts, step %u m\n", st, _track.current(),
+               (unsigned long)_track.distM(), (unsigned long)_track.pts(), _track.step());
+    } else {
+      snprintf(line, sizeof(line), "  > track off, step %u m, room %ld KB\n", _track.step(), trackRoom() / 1024);
+    }
+    out.print(line);
+    return;
+  }
+  if (strcmp(arg, "start") == 0) {
+    uint8_t n = trackStart();
+    if (n) snprintf(line, sizeof(line), "  > track #%u started\n", n);
+    else snprintf(line, sizeof(line), "  Error: no room for a track\n");
+    out.print(line);
+  } else if (strcmp(arg, "pause") == 0) {
+    trackPause(); out.print("  > track paused\n");
+  } else if (strcmp(arg, "resume") == 0) {
+    trackResume(); out.print("  > track recording\n");
+  } else if (strcmp(arg, "stop") == 0) {
+    trackStop(); out.print("  > track stopped\n");
+  } else if (strcmp(arg, "list") == 0) {
+    uint8_t l[TRK_MAX];
+    int k = _track.list(l, TRK_MAX);
+    if (k == 0) out.print("  > no tracks\n");
+    for (int i = (k > 8 ? k - 8 : 0); i < k; i++) {   // the eight newest
+      TrackInfo ti;
+      if (!_track.info(l[i], ti)) continue;
+      int64_t local = (int64_t)ti.start + (int64_t)_prefs.tz_offset_mins * 60;
+      uint32_t lt = local > 0 ? (uint32_t)local : 0;
+      uint32_t d = lt / 86400UL;
+      // day.month from the days since 1970
+      int y = 1970; uint32_t days = d;
+      for (;;) { bool lp = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; uint32_t n = lp ? 366 : 365; if (days < n) break; days -= n; y++; }
+      static const uint8_t md[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+      int m = 0;
+      for (; m < 12; m++) { int dim = md[m] + (m == 1 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0) ? 1 : 0); if (days < (uint32_t)dim) break; days -= dim; }
+      snprintf(line, sizeof(line), "  #%u %02lu.%02d %02lu:%02lu %lu.%02lukm %lupt\n", ti.n, (unsigned long)days + 1, m + 1,
+               (unsigned long)((lt / 3600UL) % 24UL), (unsigned long)((lt / 60UL) % 60UL),
+               (unsigned long)(ti.dist_m / 1000), (unsigned long)((ti.dist_m % 1000) / 10), (unsigned long)ti.pts);
+      out.print(line);
+    }
+  } else if (strcmp(arg, "raw") == 0) {   // for the track web page
+    uint8_t l[TRK_MAX];
+    int k = _track.list(l, TRK_MAX);
+    for (int i = 0; i < k; i++) {
+      TrackInfo ti;
+      if (!_track.info(l[i], ti)) continue;
+      snprintf(line, sizeof(line), "TL,%u,%lu,%lu,%lu,%lu,%lu,%d\n", ti.n, (unsigned long)ti.start, (unsigned long)ti.end,
+               (unsigned long)ti.pts, (unsigned long)ti.dist_m, (unsigned long)ti.moving_s,
+               (_track.state() != TrackLog::OFF && ti.n == _track.current()) ? 1 : 0);
+      out.print(line);
+    }
+    snprintf(line, sizeof(line), "TLEND,%d,%d\n", _prefs.tz_offset_mins, (int)_track.state());
+    out.print(line);
+  } else if (strcmp(arg, "demo") == 0) {
+    // a made-up track (a loop of about a kilometre, an hour ago) to try the
+    // track page with; `track del N` removes it
+    if (_track.state() != TrackLog::OFF) { out.print("  Error: stop the track first\n"); return; }
+    trackMakeRoom();
+    uint32_t now = getRTCClock()->getCurrentTime();
+    int32_t lat0 = 5575580, lon0 = 3761730;
+#if ENV_INCLUDE_GPS == 1
+    LocationProvider* loc = sensors.getLocationProvider();
+    if (loc != NULL && loc->isValid()) { lat0 = loc->getLatitude() / 10; lon0 = loc->getLongitude() / 10; }
+#endif
+    uint8_t n = _track.start(now - 3600);
+    if (n == 0) { out.print("  Error: no room\n"); return; }
+    for (int i = 0; i <= 240; i++) {
+      if (i == 120) { _track.pause(); _track.resume(); }   // a second segment after a stop
+      float a = (float)i / 240.0f * 6.2832f;
+      int32_t la = lat0 + (int32_t)(180.0f * sinf(a)) + (int32_t)(20.0f * sinf(a * 7.0f));
+      int32_t lo = lon0 + (int32_t)(300.0f * (1.0f - cosf(a)));
+      _track.onFix(now - 3600 + (uint32_t)i * 15, la, lo);
+    }
+    _track.stop();
+    TrackInfo ti;
+    _track.info(n, ti);
+    snprintf(line, sizeof(line), "  > demo track #%u: %lu m, %lu pts, %lu bytes\n", n, (unsigned long)ti.dist_m,
+             (unsigned long)ti.pts, (unsigned long)ti.bytes);
+    out.print(line);
+  } else if (memcmp(arg, "get ", 4) == 0) {
+    _track.dump((uint8_t)atoi(arg + 4), out);
+  } else if (memcmp(arg, "del ", 4) == 0) {
+    const char* a = arg + 4;
+    while (*a == ' ') a++;
+    if (strcmp(a, "all") == 0) {
+      int k = 0;
+      for (int i = 1; i <= TRK_MAX; i++) if (_track.remove(i)) k++;
+      snprintf(line, sizeof(line), "  > removed %d tracks\n", k);
+    } else {
+      int n = atoi(a);
+      snprintf(line, sizeof(line), _track.remove(n) ? "  > track #%d removed\n" : "  Error: no track #%d (or it is recording)\n", n);
+    }
+    out.print(line);
+  } else {
+    out.print("  Error: track [start|pause|resume|stop|list|del N|all]\n");
+  }
 }
 
 bool MyMesh::nightNow() const {
@@ -1592,6 +1793,13 @@ void MyMesh::begin(bool has_display) {
   board.setLoRaFemPaGainEnabled(_prefs.radio_fem_txgain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+
+  _track.begin(_store->getSecondaryFS() ? _store->getSecondaryFS() : _store->getPrimaryFS());
+  _track.setStep(_prefs.track_step ? _prefs.track_step : 20);
+#if ENV_INCLUDE_GPS == 1
+  if (_prefs.track_state != 0) _track.resumeAfterBoot(_prefs.track_n, _prefs.track_state == 2);
+  if (_track.state() == TrackLog::OFF && _prefs.track_state != 0) { _prefs.track_state = 0; }
+#endif
 }
 
 const char *MyMesh::getNodeName() {
@@ -2908,7 +3116,7 @@ static void formatLocalDateTime(uint32_t utc, int16_t tz_mins, char* buf, size_t
 void MyMesh::runCLICommand(char* command, Print& out) {
     char line[96];
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set badge [text], set sport on|off, set lock on|off, set night on|off|23-7, set alarm HH:MM|on|off, ok, set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
+      out.print("help, ver, clock, clock.node, clock.node remove <index>, clock pull, set pin N, set tz ±H[:MM], set time YYYY-MM-DD HH:MM[:SS], set clock.node off|<pubkey>, set lang ru|en, set phrase N [text], phrases [1-3], set badge [text], set sport on|off, set lock on|off, set night on|off|23-7, set alarm HH:MM|on|off, ok, track [start|pause|resume|stop|list|del N], set track step N, set wifi ssid|pass, wifi, set kb std|freq, set caps on|off, set cursor on|off, set bigclock on|off, beacon, set beacon to|every|move|off, sos [stop], set sos #channel, stats [reset], relays, relay ..., ls [path], cat UserData/..|ExtraFS/.., rm path, rebuild, erase, reboot\n");
     } else if (strcmp(command, "ver") == 0) {
       snprintf(line, sizeof(line), "%s %s\n", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
       out.print(line);
@@ -3272,6 +3480,44 @@ void MyMesh::runCLICommand(char* command, Print& out) {
       snprintf(line, sizeof(line), "  > alarm %s, %02d:%02d\n", _prefs.alarm_on ? "on" : "off",
                _prefs.alarm_min / 60, _prefs.alarm_min % 60);
       out.print(line);
+    } else if (memcmp(command, "track", 5) == 0 && (command[5] == 0 || command[5] == ' ')) {
+#if ENV_INCLUDE_GPS == 1
+      trackCommand(&command[5], out);
+#else
+      out.print("  Error: no GPS in this build\n");
+#endif
+    } else if (memcmp(command, "set track step", 14) == 0) {
+      int m = atoi(&command[14]);
+      if (m < 5 || m > 1000) { out.print("  Error: set track step 5..1000\n"); return; }
+      _prefs.track_step = m;
+      _track.setStep(m);
+      savePrefs();
+      snprintf(line, sizeof(line), "  > track step %d m\n", m);
+      out.print(line);
+    } else if (memcmp(command, "set wifi ", 9) == 0) {
+      // set wifi ssid NAME | set wifi pass PASSWORD: WiFi builds join it after a reboot
+      const char* a = &command[9];
+      if (memcmp(a, "ssid", 4) == 0) {
+        a += 4; while (*a == ' ') a++;
+        StrHelper::strncpy(_prefs.wifi_ssid, a, sizeof(_prefs.wifi_ssid));
+      } else if (memcmp(a, "pass", 4) == 0) {
+        a += 4; while (*a == ' ') a++;
+        StrHelper::strncpy(_prefs.wifi_pwd, a, sizeof(_prefs.wifi_pwd));
+      } else {
+        out.print("  Error: set wifi ssid NAME | set wifi pass PASSWORD\n");
+        return;
+      }
+      savePrefs();
+      out.print("  > saved, reboot to join\n");
+    } else if (strcmp(command, "wifi") == 0) {
+#ifdef WIFI_SSID
+      IPAddress ip = WiFi.localIP();
+      snprintf(line, sizeof(line), "  > wifi %s, ip %d.%d.%d.%d, track page http://%d.%d.%d.%d/\n",
+               _prefs.wifi_ssid[0] ? _prefs.wifi_ssid : WIFI_SSID, ip[0], ip[1], ip[2], ip[3], ip[0], ip[1], ip[2], ip[3]);
+      out.print(line);
+#else
+      out.print("  > no WiFi in this build\n");
+#endif
     } else if (strcmp(command, "ok") == 0) {
       // "I'm OK" with the position to the SOS channel and favourites
       okSend();
@@ -3794,6 +4040,7 @@ void MyMesh::loop() {
   checkSos();
 #if ENV_INCLUDE_GPS == 1
   beaconRetryCheck();
+  trackLoop();
 #endif
 
   {   // a relay switched (or failed): tell whoever asked by a mesh text

@@ -304,6 +304,7 @@ class HomeScreen : public UIScreen {
 #if ENV_INCLUDE_GPS == 1
     GPS,
     BEACON,
+    TRACK,   // GPS track: start / pause / stop, distance, a sketch of the way
 #endif
 #if UI_SENSORS_PAGE == 1
     SENSORS,
@@ -602,6 +603,99 @@ class HomeScreen : public UIScreen {
     }
     return _page;
   }
+
+#if ENV_INCLUDE_GPS == 1
+  // a line between two points of the sketch, one dot at a time
+  static void sketchLine(DisplayDriver& d, int x0, int y0, int x1, int y1) {
+    int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+    for (int guard = 0; guard < 256; guard++) {
+      d.fillRect(x0, y0, 1, 1);
+      if (x0 == x1 && y0 == y1) break;
+      int e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+  }
+
+  // Track page: state, distance, time and speed on the left, the way so far on the right
+  void renderTrack(DisplayDriver& display) {
+    TrackLog& t = the_mesh.track();
+    bool ru = _task->langRu();
+    char line[40], shown[40];
+    display.setTextSize(1);
+    int W = display.width();
+    const int bx = W - 46, by = 14, bw = 44, bh = 37;
+    int st = t.state();
+    const char* state;
+    if (the_mesh.trackFull()) state = ru ? "Память полна" : "Storage full";
+    else if (st == TrackLog::REC) state = (_task->gpsOn() && t.hasFix()) || t.pts() > 0 ? (ru ? "Запись" : "Recording") : (ru ? "Ждём GPS" : "Wait GPS");
+    else if (st == TrackLog::PAUSED) state = ru ? "Пауза" : "Paused";
+    else state = ru ? "Трек выкл" : "Track off";
+    display.setColor(st == TrackLog::REC ? UIColor::warning_txt : UIColor::primary_txt);
+    if (st != TrackLog::OFF) snprintf(line, sizeof(line), "%s %u", state, t.current());
+    else snprintf(line, sizeof(line), "%s", state);
+    display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+    display.drawTextLeftAlign(0, 14, shown);
+    display.setColor(UIColor::primary_txt);
+    if (st != TrackLog::OFF) {
+      uint32_t d = t.distM();
+      if (d < 1000) snprintf(line, sizeof(line), ru ? "%lu м" : "%lu m", (unsigned long)d);
+      else snprintf(line, sizeof(line), ru ? "%lu.%02lu км" : "%lu.%02lu km", (unsigned long)(d / 1000), (unsigned long)((d % 1000) / 10));
+      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+      display.drawTextLeftAlign(0, 24, shown);
+      uint32_t s = t.movingS();
+      snprintf(line, sizeof(line), "%lu:%02lu:%02lu", (unsigned long)(s / 3600), (unsigned long)((s / 60) % 60), (unsigned long)(s % 60));
+      display.drawTextLeftAlign(0, 34, line);
+      snprintf(line, sizeof(line), ru ? "%.1f км/ч" : "%.1f km/h", st == TrackLog::REC ? t.speedKmh() : 0.0f);
+      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+      display.drawTextLeftAlign(0, 44, shown);
+    } else {
+      uint8_t l[TRK_MAX];
+      int k = the_mesh.track().list(l, TRK_MAX);
+      snprintf(line, sizeof(line), ru ? "треков: %d" : "tracks: %d", k);
+      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+      display.drawTextLeftAlign(0, 26, shown);
+      snprintf(line, sizeof(line), ru ? "шаг %u м" : "step %u m", t.step());
+      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextLeftAlign(0, 38, shown);
+    }
+    // the way so far
+    display.setColor(UIColor::secondary_txt);
+    display.drawRect(bx - 1, by - 1, bw + 2, bh + 2);
+    int n = t.sketchCount();
+    if (n > 0) {
+      int32_t a = INT32_MAX, b = INT32_MIN, c = INT32_MAX, e = INT32_MIN;
+      for (int i = 0; i < n; i++) {
+        int32_t la, lo; t.sketchPoint(i, la, lo);
+        if (lo < a) a = lo; if (lo > b) b = lo; if (la < c) c = la; if (la > e) e = la;
+      }
+      float k = cosf((float)(c + e) * 0.5f * 1e-5f * 0.0174533f);
+      float w = (float)(b - a) * k, h = (float)(e - c);
+      if (w < 1) w = 1; if (h < 1) h = 1;
+      float sc = fminf((bw - 2) / w, (bh - 2) / h);
+      int ox = bx + 1 + (int)((bw - 2 - w * sc) / 2), oy = by + 1 + (int)((bh - 2 - h * sc) / 2);
+      display.setColor(UIColor::primary_txt);
+      int px = -1, py = -1;
+      for (int i = 0; i < n; i++) {
+        int32_t la, lo; t.sketchPoint(i, la, lo);
+        int x = ox + (int)((float)(lo - a) * k * sc), y = oy + (int)((float)(e - la) * sc);
+        if (px >= 0) sketchLine(display, px, py, x, y);
+        else display.fillRect(x - 1, y - 1, 3, 3);   // the start
+        px = x; py = y;
+      }
+      display.fillRect(px - 1, py - 1, 3, 3);       // here
+    } else {
+      display.drawTextCentered(bx + bw / 2, by + bh / 2 - 4, "GPS");
+    }
+    display.setColor(UIColor::secondary_txt);
+    const char* hint = st == TrackLog::OFF ? (ru ? "держ.: старт" : "hold: start")
+                     : st == TrackLog::REC ? (ru ? "держ. пауза 4х стоп" : "hold:pause 4x:stop")
+                     : (ru ? "держ. дальше 4х стоп" : "hold:go on 4x:stop");
+    display.translateUTF8ToBlocks(shown, hint, sizeof(shown));
+    display.drawTextCentered(W / 2, 64 - 11, shown);
+  }
+#endif
 
 public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
@@ -1245,6 +1339,10 @@ public:
       }
 #endif
 #if UI_SENSORS_PAGE == 1
+#if ENV_INCLUDE_GPS == 1
+    } else if (_page == HomePage::TRACK) {
+      renderTrack(display);
+#endif
     } else if (_page == HomePage::SENSORS) {
       int y = 18;
       refresh_sensors();
@@ -1420,6 +1518,7 @@ public:
     if (_page == HomePage::NEIGHBORS) return 1000;
 #if ENV_INCLUDE_GPS == 1
     if (_page == HomePage::BEACON) return 1000;
+    if (_page == HomePage::TRACK) return the_mesh.track().state() == TrackLog::REC ? 2000 : 5000;
 #endif
     return 5000;   // next render after 5000 ms
   }
@@ -1427,6 +1526,15 @@ public:
   bool handleInput(char c) override {
     if (c == KEY_QUAD) {
 #if ENV_INCLUDE_GPS == 1
+      if (_page == HomePage::TRACK) {   // four clicks: the track is finished
+        if (the_mesh.track().state() == TrackLog::OFF) { _task->openGlance(); return true; }
+        char a[32];
+        snprintf(a, sizeof(a), _task->langRu() ? "Трек %u сохранён" : "Track %u saved", the_mesh.track().current());
+        the_mesh.trackStop();
+        _task->notify(UIEventType::ack);
+        _task->showAlert(a, 1200);
+        return true;
+      }
       if (_page != HomePage::BEACON) { _task->openGlance(); return true; }   // four clicks: time at a glance
       _bcn_edit = false;
       if (the_mesh.stopBeacon()) {
@@ -1670,6 +1778,27 @@ public:
       _task->toggleGPS();
       return true;
     }
+#if ENV_INCLUDE_GPS == 1
+    if (c == KEY_ENTER && _page == HomePage::TRACK) {   // hold: start / pause / go on
+      TrackLog& t = the_mesh.track();
+      bool ru = _task->langRu();
+      char a[32];
+      if (t.state() == TrackLog::OFF) {
+        uint8_t n = the_mesh.trackStart();
+        if (n) snprintf(a, sizeof(a), ru ? "Запись трека %u" : "Track %u started", n);
+        else snprintf(a, sizeof(a), ru ? "Нет места" : "No room");
+      } else if (t.state() == TrackLog::REC) {
+        the_mesh.trackPause();
+        snprintf(a, sizeof(a), ru ? "Пауза" : "Paused");
+      } else {
+        the_mesh.trackResume();
+        snprintf(a, sizeof(a), ru ? "Запись дальше" : "Recording");
+      }
+      _task->notify(UIEventType::ack);
+      _task->showAlert(a, 1000);
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::BEACON) {
       // first hold opens the settings; then hold changes the row under the cursor
       if (!_bcn_edit) {

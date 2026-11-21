@@ -27,6 +27,7 @@
 
 #include "DataStore.h"
 #include "NodePrefs.h"
+#include "TrackLog.h"
 #include "UiPhrases.h"
 #include "Relays.h"
 
@@ -158,6 +159,16 @@ public:
   const uint8_t* uiPingKey() const { return _ping_key; }
   // quiet hours: no sound or buzz for messages
   bool nightNow() const;
+  // GPS track (TrackLog.h): start turns the GPS on; the oldest tracks go
+  // when the space is needed, the room for a full contact list always stays
+  TrackLog& track() { return _track; }
+  uint8_t trackStart();          // 0 = no room
+  void trackPause();
+  void trackResume();
+  void trackStop();
+  bool trackFull() const { return _track_full; }
+  // a console command from the device itself (the WiFi track page)
+  void consoleCommand(char* cmd, Print& out) { runCLICommand(cmd, out); }
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
   // Write page phrases: the console replaces any of them (set phrase N text)
@@ -301,6 +312,13 @@ private:
   char _usb_cmd[96];
   uint8_t _usb_len = 0;
   void checkUsbConsole();
+  TrackLog _track;
+  unsigned long _trk_next = 0, _trk_room_next = 0;
+  bool _track_full = false;
+  long trackRoom();
+  void trackMakeRoom();
+  void trackLoop();
+  void trackCommand(const char* arg, Print& out);
   void checkSos();
   unsigned long _loop_max = 0, _loop_ui_max = 0, _loop_since = 0;
   uint32_t _loop_slow = 0, _loop_n = 0;

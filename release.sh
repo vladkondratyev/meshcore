@@ -52,6 +52,7 @@ for f in "$OUT"/*.bin "$OUT"/*.uf2; do
   grep -qaF -- "$TAG-$HASH" "$f" || { echo "wrong version inside $f"; exit 1; }   # grep -a: binary file
 done
 rm -f "$OUT"/.log-*.txt
+cp docs/track.html "$OUT"/meshcore-track.html   # the track page: open in Chrome, connect over USB
 ls -1 "$OUT"
 echo "== built $(ls "$OUT" | wc -l | tr -d ' ') files in $OUT/"
 
