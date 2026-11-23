@@ -49,7 +49,12 @@ done
 # every file must carry this version and commit
 for f in "$OUT"/*.bin "$OUT"/*.uf2; do
   case "$f" in *-merged.bin) continue;; esac
-  grep -qaF -- "$TAG-$HASH" "$f" || { echo "wrong version inside $f"; exit 1; }   # grep -a: binary file
+  case "$f" in
+    *.uf2)   # UF2: 476-byte payloads behind 32-byte headers, the string may cross a block
+      python3 -c 'import sys,struct; d=open(sys.argv[1],"rb").read(); p=b"".join(d[i+32:i+32+struct.unpack("<I",d[i+16:i+20])[0]] for i in range(0,len(d),512)); sys.exit(0 if sys.argv[2].encode() in p else 1)' "$f" "$TAG-$HASH" \
+        || { echo "wrong version inside $f"; exit 1; } ;;
+    *) grep -qaF -- "$TAG-$HASH" "$f" || { echo "wrong version inside $f"; exit 1; } ;;   # grep -a: binary file
+  esac
 done
 rm -f "$OUT"/.log-*.txt
 ls -1 "$OUT"
