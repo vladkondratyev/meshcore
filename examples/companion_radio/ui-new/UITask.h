@@ -58,14 +58,13 @@ class UITask : public AbstractUITask {
   UIScreen* stopwatch;      // stopwatch and timer: six clicks
   UIScreen* glance;         // time at a glance: four clicks on the menu pages
   UIScreen* badge;          // badge line: ten clicks
-  UIScreen* games;          // Games page: Runner, Tower, Snake
-  UIScreen* sos;            // SOS: 5 s hold
+  UIScreen* games;          // Games page: Runner, Tower, Snake, Raid
+  UIScreen* _clock_back = NULL;   // a 5 s hold showed the clock over this screen
   UIScreen* reader;    // e-book reader (BOOK_READER builds)
   UIScreen* compose;   // Write page: message typed on the device
   UIScreen* sent;      // Sent page: what the device sent, to whom, in reply to what
   UIScreen* relays;    // Relays page: smart switches
   UIScreen* chats;     // Chats page: messages both ways per contact / channel
-  UIScreen* sos_alert; // an SOS came in: the screen flashes until a press
   ChatLog _chat_log;
   bool _locked = false;
   uint8_t _vib_more = 0;           // vibration pulses still to come
@@ -78,6 +77,7 @@ class UITask : public AbstractUITask {
   bool keyLockFilter(int ev);
   void goHomeAll();
   void checkAlarm();
+  void checkPhoneRead();
   void sampleBattery();
   SentLog _sent_log;
   UIScreen* curr;
@@ -111,13 +111,11 @@ public:
     glance = NULL;
     badge = NULL;
     games = NULL;
-    sos = NULL;
     reader = NULL;
     compose = NULL;
     sent = NULL;
     relays = NULL;
     chats = NULL;
-    sos_alert = NULL;
     _idle_since = 0;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
@@ -138,7 +136,6 @@ public:
   void openChats();
   int chatPages();
   bool inChats() const { return curr != NULL && curr == chats; }
-  bool inSosAlert() const { return curr != NULL && curr == sos_alert; }
   void openAlarm();
   // battery: about how many minutes are left; -1 not known yet, -2 charging
   long battMinutesLeft() const;
@@ -148,7 +145,10 @@ public:
   bool inBadge() const { return curr != NULL && curr == badge; }
   void openGames();
   bool inGames() const { return curr != NULL && curr == games; }
-  bool inSos() const { return curr != NULL && curr == sos; }
+  // a 5 s hold: the big clock until any press, then the same screen again
+  void openClockPeek();
+  bool closeClockPeek();   // true: a press was taken to leave the clock
+  bool inClockPeek() const { return _clock_back != NULL; }
   SentLog& sentLog() { return _sent_log; }
   int  getUnreadCount() const;
   bool inCompose() const { return curr != NULL && curr == compose; }
@@ -176,6 +176,7 @@ public:
   bool autoCursor() const { return _node_prefs != NULL && _node_prefs->auto_cursor != 0; }
   bool chargeClockEnabled() const { return _node_prefs != NULL && _node_prefs->charge_clock != 0; }
   bool swSport() const { return _node_prefs != NULL && _node_prefs->sw_sport != 0; }
+  bool phoneRead() const { return _node_prefs != NULL && _node_prefs->phone_read != 0; }
   bool autoCaps() const { return _node_prefs == NULL || _node_prefs->auto_caps != 0; }
   void keepDisplayAwake();
   void requestRefresh() { _next_refresh = 0; }

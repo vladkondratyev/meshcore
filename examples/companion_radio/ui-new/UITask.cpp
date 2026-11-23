@@ -304,7 +304,6 @@ class HomeScreen : public UIScreen {
 #if ENV_INCLUDE_GPS == 1
     GPS,
     BEACON,
-    TRACK,   // GPS track: start / pause / stop, distance, a sketch of the way
 #endif
 #if UI_SENSORS_PAGE == 1
     SENSORS,
@@ -313,7 +312,7 @@ class HomeScreen : public UIScreen {
 #ifdef UI_MSG_TICKER
     TICKER,  // running line on/off, right before hibernate
 #endif
-    GAMES,   // Runner, Tower, Snake, Blocks, Raid; not on e-ink
+    GAMES,   // Runner, Tower, Snake, Raid; not on e-ink
     SHUTDOWN,
     Count    // keep as last
   };
@@ -331,7 +330,7 @@ class HomeScreen : public UIScreen {
   bool _bcn_edit = false;    // Beacon page: changing settings
 
   // Msg scroll page: running line and keyboard settings in one place
-  #define MSG_SET_ROWS 9
+  #define MSG_SET_ROWS 10
   #define MSG_SET_SHOWN 3
   void changeMsgSetting() {
     if (!_node_prefs) return;
@@ -353,6 +352,8 @@ class HomeScreen : public UIScreen {
       _node_prefs->key_lock = _node_prefs->key_lock ? 0 : 1;
     } else if (_msg_row == 7) {
       _node_prefs->night_on = _node_prefs->night_on ? 0 : 1;
+    } else if (_msg_row == 8) {
+      _node_prefs->phone_read = _node_prefs->phone_read ? 0 : 1;
     } else {
       return;   // the firmware version: nothing to change
     }
@@ -603,99 +604,6 @@ class HomeScreen : public UIScreen {
     }
     return _page;
   }
-
-#if ENV_INCLUDE_GPS == 1
-  // a line between two points of the sketch, one dot at a time
-  static void sketchLine(DisplayDriver& d, int x0, int y0, int x1, int y1) {
-    int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
-    for (int guard = 0; guard < 256; guard++) {
-      d.fillRect(x0, y0, 1, 1);
-      if (x0 == x1 && y0 == y1) break;
-      int e2 = 2 * err;
-      if (e2 >= dy) { err += dy; x0 += sx; }
-      if (e2 <= dx) { err += dx; y0 += sy; }
-    }
-  }
-
-  // Track page: state, distance, time and speed on the left, the way so far on the right
-  void renderTrack(DisplayDriver& display) {
-    TrackLog& t = the_mesh.track();
-    bool ru = _task->langRu();
-    char line[40], shown[40];
-    display.setTextSize(1);
-    int W = display.width();
-    const int bx = W - 46, by = 14, bw = 44, bh = 37;
-    int st = t.state();
-    const char* state;
-    if (the_mesh.trackFull()) state = ru ? "Память полна" : "Storage full";
-    else if (st == TrackLog::REC) state = (_task->gpsOn() && t.hasFix()) || t.pts() > 0 ? (ru ? "Запись" : "Recording") : (ru ? "Ждём GPS" : "Wait GPS");
-    else if (st == TrackLog::PAUSED) state = ru ? "Пауза" : "Paused";
-    else state = ru ? "Трек выкл" : "Track off";
-    display.setColor(st == TrackLog::REC ? UIColor::warning_txt : UIColor::primary_txt);
-    if (st != TrackLog::OFF) snprintf(line, sizeof(line), "%s %u", state, t.current());
-    else snprintf(line, sizeof(line), "%s", state);
-    display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-    display.drawTextLeftAlign(0, 14, shown);
-    display.setColor(UIColor::primary_txt);
-    if (st != TrackLog::OFF) {
-      uint32_t d = t.distM();
-      if (d < 1000) snprintf(line, sizeof(line), ru ? "%lu м" : "%lu m", (unsigned long)d);
-      else snprintf(line, sizeof(line), ru ? "%lu.%02lu км" : "%lu.%02lu km", (unsigned long)(d / 1000), (unsigned long)((d % 1000) / 10));
-      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      display.drawTextLeftAlign(0, 24, shown);
-      uint32_t s = t.movingS();
-      snprintf(line, sizeof(line), "%lu:%02lu:%02lu", (unsigned long)(s / 3600), (unsigned long)((s / 60) % 60), (unsigned long)(s % 60));
-      display.drawTextLeftAlign(0, 34, line);
-      snprintf(line, sizeof(line), ru ? "%.1f км/ч" : "%.1f km/h", st == TrackLog::REC ? t.speedKmh() : 0.0f);
-      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      display.drawTextLeftAlign(0, 44, shown);
-    } else {
-      uint8_t l[TRK_MAX];
-      int k = the_mesh.track().list(l, TRK_MAX);
-      snprintf(line, sizeof(line), ru ? "треков: %d" : "tracks: %d", k);
-      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      display.drawTextLeftAlign(0, 26, shown);
-      snprintf(line, sizeof(line), ru ? "шаг %u м" : "step %u m", t.step());
-      display.translateUTF8ToBlocks(shown, line, sizeof(shown));
-      display.setColor(UIColor::secondary_txt);
-      display.drawTextLeftAlign(0, 38, shown);
-    }
-    // the way so far
-    display.setColor(UIColor::secondary_txt);
-    display.drawRect(bx - 1, by - 1, bw + 2, bh + 2);
-    int n = t.sketchCount();
-    if (n > 0) {
-      int32_t a = INT32_MAX, b = INT32_MIN, c = INT32_MAX, e = INT32_MIN;
-      for (int i = 0; i < n; i++) {
-        int32_t la, lo; t.sketchPoint(i, la, lo);
-        if (lo < a) a = lo; if (lo > b) b = lo; if (la < c) c = la; if (la > e) e = la;
-      }
-      float k = cosf((float)(c + e) * 0.5f * 1e-5f * 0.0174533f);
-      float w = (float)(b - a) * k, h = (float)(e - c);
-      if (w < 1) w = 1; if (h < 1) h = 1;
-      float sc = fminf((bw - 2) / w, (bh - 2) / h);
-      int ox = bx + 1 + (int)((bw - 2 - w * sc) / 2), oy = by + 1 + (int)((bh - 2 - h * sc) / 2);
-      display.setColor(UIColor::primary_txt);
-      int px = -1, py = -1;
-      for (int i = 0; i < n; i++) {
-        int32_t la, lo; t.sketchPoint(i, la, lo);
-        int x = ox + (int)((float)(lo - a) * k * sc), y = oy + (int)((float)(e - la) * sc);
-        if (px >= 0) sketchLine(display, px, py, x, y);
-        else display.fillRect(x - 1, y - 1, 3, 3);   // the start
-        px = x; py = y;
-      }
-      display.fillRect(px - 1, py - 1, 3, 3);       // here
-    } else {
-      display.drawTextCentered(bx + bw / 2, by + bh / 2 - 4, "GPS");
-    }
-    display.setColor(UIColor::secondary_txt);
-    const char* hint = st == TrackLog::OFF ? (ru ? "держ.: старт" : "hold: start")
-                     : st == TrackLog::REC ? (ru ? "держ. пауза 4х стоп" : "hold:pause 4x:stop")
-                     : (ru ? "держ. дальше 4х стоп" : "hold:go on 4x:stop");
-    display.translateUTF8ToBlocks(shown, hint, sizeof(shown));
-    display.drawTextCentered(W / 2, 64 - 11, shown);
-  }
-#endif
 
 public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
@@ -1339,10 +1247,6 @@ public:
       }
 #endif
 #if UI_SENSORS_PAGE == 1
-#if ENV_INCLUDE_GPS == 1
-    } else if (_page == HomePage::TRACK) {
-      renderTrack(display);
-#endif
     } else if (_page == HomePage::SENSORS) {
       int y = 18;
       refresh_sensors();
@@ -1449,14 +1353,14 @@ public:
       const char* ver = FIRMWARE_VERSION;
 #endif
       const char* rows_l[MSG_SET_ROWS] = { "Msg scroll", "Keys layout", "Auto caps", "Auto cursor", "Big clock", "Sport watch",
-                                           "Key lock", "Quiet night", "Firmware" };
+                                           "Key lock", "Quiet night", "Phone read", "Firmware" };
       const char* rows_r[MSG_SET_ROWS] = { _task->tickerEnabled() ? "ON" : "OFF", layout,
                                            _task->autoCaps() ? "ON" : "OFF",
                                            _task->autoCursor() ? "ON" : "OFF",
                                            _task->chargeClockEnabled() ? "ON" : "OFF",
                                            _task->swSport() ? "ON" : "OFF",
                                            (_node_prefs && _node_prefs->key_lock) ? "ON" : "OFF",
-                                           night, ver };
+                                           night, _task->phoneRead() ? "ON" : "OFF", ver };
       display.setTextSize(1);
       // three rows on screen; the window follows the cursor
       int top = 0;
@@ -1485,8 +1389,8 @@ public:
     } else if (_page == HomePage::GAMES) {
       display.setTextSize(1);
       display.setColor(UIColor::primary_txt);
-      display.drawTextCentered(display.width() / 2, 16, "Runner Tower Snake");
-      display.drawTextCentered(display.width() / 2, 26, "Blocks  Raid");
+      display.drawTextCentered(display.width() / 2, 16, "Runner  Tower");
+      display.drawTextCentered(display.width() / 2, 26, "Snake  Raid");
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 38, "one button games");
       display.drawTextCentered(display.width() / 2, 64 - 11, "games: " PRESS_LABEL);
@@ -1518,7 +1422,6 @@ public:
     if (_page == HomePage::NEIGHBORS) return 1000;
 #if ENV_INCLUDE_GPS == 1
     if (_page == HomePage::BEACON) return 1000;
-    if (_page == HomePage::TRACK) return the_mesh.track().state() == TrackLog::REC ? 2000 : 5000;
 #endif
     return 5000;   // next render after 5000 ms
   }
@@ -1526,15 +1429,6 @@ public:
   bool handleInput(char c) override {
     if (c == KEY_QUAD) {
 #if ENV_INCLUDE_GPS == 1
-      if (_page == HomePage::TRACK) {   // four clicks: the track is finished
-        if (the_mesh.track().state() == TrackLog::OFF) { _task->openGlance(); return true; }
-        char a[32];
-        snprintf(a, sizeof(a), _task->langRu() ? "Трек %u сохранён" : "Track %u saved", the_mesh.track().current());
-        the_mesh.trackStop();
-        _task->notify(UIEventType::ack);
-        _task->showAlert(a, 1200);
-        return true;
-      }
       if (_page != HomePage::BEACON) { _task->openGlance(); return true; }   // four clicks: time at a glance
       _bcn_edit = false;
       if (the_mesh.stopBeacon()) {
@@ -1778,27 +1672,6 @@ public:
       _task->toggleGPS();
       return true;
     }
-#if ENV_INCLUDE_GPS == 1
-    if (c == KEY_ENTER && _page == HomePage::TRACK) {   // hold: start / pause / go on
-      TrackLog& t = the_mesh.track();
-      bool ru = _task->langRu();
-      char a[32];
-      if (t.state() == TrackLog::OFF) {
-        uint8_t n = the_mesh.trackStart();
-        if (n) snprintf(a, sizeof(a), ru ? "Запись трека %u" : "Track %u started", n);
-        else snprintf(a, sizeof(a), ru ? "Нет места" : "No room");
-      } else if (t.state() == TrackLog::REC) {
-        the_mesh.trackPause();
-        snprintf(a, sizeof(a), ru ? "Пауза" : "Paused");
-      } else {
-        the_mesh.trackResume();
-        snprintf(a, sizeof(a), ru ? "Запись дальше" : "Recording");
-      }
-      _task->notify(UIEventType::ack);
-      _task->showAlert(a, 1000);
-      return true;
-    }
-#endif
     if (c == KEY_ENTER && _page == HomePage::BEACON) {
       // first hold opens the settings; then hold changes the row under the cursor
       if (!_bcn_edit) {
@@ -2049,6 +1922,11 @@ public:
   int chatCount() const { return chats; }
   int unreadCount() const { return num_unread; }
   int storedCount() const { return stored; }
+  // the phone took the messages: nothing is unread here (they stay for Recent)
+  void markAllRead() {
+    num_unread = 0;
+    groups = chats = 0;
+  }
 
   bool reopen() {
     if (stored == 0) return false;
@@ -2940,7 +2818,7 @@ public:
 //   second: neighbours, GPS, how long ago the last message came
 //   middle: HH:MM:SS big
 //   bottom: the stopwatch and the timer while they count or hold a time
-// hold - stopwatch / timer, double - alarm, triple - "I'm OK" (hold confirms),
+// hold - stopwatch / timer, double - alarm,
 // any other press or 15 s without presses - back to the same menu page.
 #ifndef GLANCE_MILLIS
   #define GLANCE_MILLIS 15000UL
@@ -2951,13 +2829,12 @@ class GlanceScreen : public UIScreen {
   NodePrefs* _prefs;
   TimerScreen* _sw;
   unsigned long _opened = 0;
-  bool _ok_ask = false;     // "I'm OK": waiting for the hold that sends it
   NeighborInfo _nb[NEIGHBOR_TABLE_SIZE];
 public:
   GlanceScreen(UITask* task, mesh::RTCClock* rtc, NodePrefs* prefs, TimerScreen* sw)
     : _task(task), _rtc(rtc), _prefs(prefs), _sw(sw) {}
 
-  void open() { _opened = millis(); _ok_ask = false; }
+  void open() { _opened = millis(); }
 
   void poll() override {
     if ((long)(millis() - _opened) >= (long)GLANCE_MILLIS) _task->gotoHomeScreen();
@@ -2971,22 +2848,6 @@ public:
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
     char buf[48], shown[48];
-
-    if (_ok_ask) {   // "I'm OK" asks before it goes out
-      display.drawTextCentered(W / 2, 2, ru ? "Отправить" : "Send");
-      display.setTextSize(2);
-      display.translateUTF8ToBlocks(shown, ru ? "Я в порядке" : "I'm OK", sizeof(shown));
-      display.drawTextCentered(W / 2, 16, shown);
-      display.setTextSize(1);
-      char who[40];
-      the_mesh.sosTargets(who, sizeof(who));
-      snprintf(buf, sizeof(buf), ru ? "кому: %s" : "to: %s", who);
-      display.translateUTF8ToBlocks(shown, buf, sizeof(shown));
-      display.drawTextCentered(W / 2, 36, shown);
-      display.setColor(UIColor::secondary_txt);
-      display.drawTextCentered(W / 2, H - 9, ru ? "держать: да, нажать: нет" : "hold: yes  press: no");
-      return 5000;
-    }
 
     uint32_t now = _rtc->getCurrentTime();
     bool valid = now >= 1000000000UL;
@@ -3069,9 +2930,9 @@ public:
       if (_prefs && _prefs->alarm_on) {
         sprintf(buf, ru ? "Будильник %02d:%02d" : "Alarm %02d:%02d", _prefs->alarm_min / 60, _prefs->alarm_min % 60);
       } else {
-        static const char* hints_ru[] = {"держ.: секундомер", "2х: будильник", "3х: я в порядке"};
-        static const char* hints_en[] = {"hold: stopwatch", "2x: alarm", "3x: I'm OK"};
-        int k = (int)((millis() / 3000UL) % 3UL);
+        static const char* hints_ru[] = {"держ.: секундомер", "2х: будильник"};
+        static const char* hints_en[] = {"hold: stopwatch", "2x: alarm"};
+        int k = (int)((millis() / 3000UL) % 2UL);
         strcpy(buf, ru ? hints_ru[k] : hints_en[k]);
         fast = true;
       }
@@ -3102,20 +2963,8 @@ public:
   }
 
   bool handleInput(char c) override {
-    if (_ok_ask) {
-      _ok_ask = false;
-      if (c == KEY_ENTER) {
-        the_mesh.okSend();
-        _task->notify(UIEventType::ack);
-        _task->showAlert(_task->langRu() ? "Отправлено: я в порядке" : "Sent: I'm OK", 1500);
-        _task->gotoHomeScreen();
-      }
-      _opened = millis();
-      return true;
-    }
     if (c == KEY_ENTER && _sw) { _task->openStopwatch(); return true; }
     if ((c == KEY_PREV || c == KEY_LEFT) && _sw) { _task->openAlarm(); return true; }
-    if (c == KEY_SELECT) { _ok_ask = true; _opened = millis(); return true; }
     _task->gotoHomeScreen();
     return true;
   }
@@ -3203,143 +3052,6 @@ public:
 };
 #endif
 
-// SOS: a 5 s hold anywhere (but in a game) arms it; after a 5 s countdown it
-// sends "SOS! geo:..." to the SOS channel and every favourite, then again every
-// 2 minutes. A press during the countdown cancels; a press later stops SOS and
-// sends "all clear".
-class SosScreen : public UIScreen {
-  UITask* _task;
-  unsigned long _armed_at = 0;
-public:
-  SosScreen(UITask* task) : _task(task) {}
-  void arm() { _armed_at = millis(); }
-
-  void poll() override {
-    if (!the_mesh.sosActive() && _armed_at && (long)(millis() - _armed_at) >= 5000) {
-      _armed_at = 0;
-      the_mesh.sosStart();
-      _task->notify(UIEventType::contactMessage);
-    }
-  }
-
-  int render(DisplayDriver& display) override {
-    bool ru = _task->langRu();
-    int W = display.width(), H = display.height();
-    bool on = the_mesh.sosActive();
-    bool blink = (millis() / 500) % 2 == 0;
-    if (on && blink) {   // the whole screen flashes while SOS is on
-      display.setColor(UIColor::primary_txt);
-      display.fillRect(0, 0, W, H);
-      display.setColor(UIColor::window_bkg);
-    } else {
-      display.setColor(UIColor::primary_txt);
-    }
-    display.setTextSize(2);
-    display.drawTextCentered(W / 2, 4, "SOS");
-    display.setTextSize(1);
-    char buf[48], shown[48];
-    if (!on) {
-      long left = 5 - (long)(millis() - _armed_at) / 1000;
-      if (left < 0) left = 0;
-      snprintf(buf, sizeof(buf), ru ? "отправка через %ld с" : "sending in %ld s", left);
-      display.translateUTF8ToBlocks(shown, buf, sizeof(shown));
-      display.drawTextCentered(W / 2, 28, shown);
-      display.translateUTF8ToBlocks(shown, ru ? "нажать: отмена" : "press: cancel", sizeof(shown));
-      display.drawTextCentered(W / 2, H - 11, shown);
-      return 250;
-    }
-    char who[40];
-    the_mesh.sosTargets(who, sizeof(who));
-    snprintf(buf, sizeof(buf), ru ? "отправлено: %u, след. %lu с" : "sent: %u, next %lu s",
-             the_mesh.sosRounds(), (unsigned long)the_mesh.sosNextSecs());
-    display.translateUTF8ToBlocks(shown, buf, sizeof(shown));
-    display.drawTextCentered(W / 2, 24, shown);
-    display.translateUTF8ToBlocks(shown, who, sizeof(shown));
-    display.drawTextCentered(W / 2, 35, shown);
-    display.translateUTF8ToBlocks(shown, ru ? "нажать: стоп" : "press: stop", sizeof(shown));
-    display.drawTextCentered(W / 2, H - 11, shown);
-    return 500;
-  }
-
-  bool handleInput(char c) override {
-    (void)c;
-    if (the_mesh.sosActive()) {
-      the_mesh.sosStop();
-      _task->showAlert(_task->langRu() ? "SOS: отбой отправлен" : "SOS: all clear sent", 1500);
-    }
-    _armed_at = 0;
-    _task->gotoHomeScreen();
-    return true;
-  }
-};
-
-// An SOS came in: the screen flashes for a minute (and beeps / buzzes where
-// it can) with who sent it and how far away. Any press shows the message.
-class SosAlertScreen : public UIScreen {
-  UITask* _task;
-  char _who[32];
-  char _text[MAX_TEXT_LEN + 1];
-  unsigned long _at = 0, _next_beep = 0;
-public:
-  SosAlertScreen(UITask* task) : _task(task) { _who[0] = _text[0] = 0; }
-  void show(const char* who, const char* text) {
-    StrHelper::strncpy(_who, who, sizeof(_who));
-    StrHelper::strncpy(_text, text, sizeof(_text));
-    _at = _next_beep = millis();
-  }
-  bool active() const { return millis() - _at < 60000UL; }
-
-  int render(DisplayDriver& display) override {
-    bool ru = _task->langRu();
-    int W = display.width(), H = display.height();
-    unsigned long el = millis() - _at;
-    bool inv = !_task->isEink() && el < 60000UL && (el / 400UL) % 2 == 0;
-    if (inv) {
-      display.setColor(UIColor::primary_txt);
-      display.fillRect(0, 0, W, H);
-      display.setColor(UIColor::window_bkg);
-    } else {
-      display.setColor(UIColor::primary_txt);
-    }
-    if (el < 60000UL && (long)(millis() - _next_beep) >= 0) {
-      _task->notify(UIEventType::contactMessage);
-      _next_beep = millis() + 3000;
-    }
-    char buf[MAX_TEXT_LEN + 40], shown[MAX_TEXT_LEN + 40];
-    display.setTextSize(2);
-    display.drawTextCentered(W / 2, 0, "SOS");
-    display.setTextSize(1);
-    snprintf(buf, sizeof(buf), ru ? "от %s" : "from %s", _who);
-    display.translateUTF8ToBlocks(shown, buf, sizeof(shown));
-    display.drawTextCentered(W / 2, 17, shown);
-    uint32_t m;
-    int brg;
-    if (the_mesh.uiGeoFromHere(_text, m, brg)) {
-      static const char* en8[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
-      static const char* ru8[] = {"С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"};
-      const char* dir = (ru ? ru8 : en8)[((brg + 22) % 360) / 45];
-      if (m < 1000) snprintf(buf, sizeof(buf), ru ? "%lu м %s" : "%lu m %s", (unsigned long)m, dir);
-      else snprintf(buf, sizeof(buf), ru ? "%lu.%lu км %s" : "%lu.%lu km %s", (unsigned long)(m / 1000), (unsigned long)((m % 1000) / 100), dir);
-    } else {
-      snprintf(buf, sizeof(buf), "%s", strstr(_text, "geo:") ? (ru ? "есть координаты" : "has a position") : (ru ? "без координат" : "no position"));
-    }
-    display.translateUTF8ToBlocks(shown, buf, sizeof(shown));
-    display.drawTextCentered(W / 2, 30, shown);
-    display.translateUTF8ToBlocks(shown, ru ? "нажать: сообщение" : "press: message", sizeof(shown));
-    display.drawTextCentered(W / 2, H - 10, shown);
-    display.markFull();
-    return el < 60000UL ? 200 : 5000;
-  }
-
-  bool handleInput(char c) override {
-    (void)c;
-    _at = millis() - 60000UL;
-    if (_task->getUnreadCount() > 0) _task->showMsgPreview();
-    else _task->gotoHomeScreen();
-    return true;
-  }
-};
-
 void UITask::openChats() {
   if (!chats) return;
   ((ChatScreen*)chats)->enter();
@@ -3379,6 +3091,20 @@ void UITask::sampleBattery() {
     _batt_n--;
   }
   _batt_mv[_batt_n++] = mv;
+}
+
+// Phone read: the phone is connected and has taken every message, so none is
+// unread here. A message on screen (or the running line) stays until it is
+// left or the screen goes dark.
+void UITask::checkPhoneRead() {
+  if (!phoneRead() || msg_preview == NULL || !hasConnection() || _msgcount > 0) return;
+  MsgPreviewScreen* p = (MsgPreviewScreen*)msg_preview;
+  if (p->unreadCount() == 0 && p->groupCount() == 0 && p->chatCount() == 0) return;
+  bool dark = _display == NULL || !_display->isOn();
+  if (curr == msg_preview && !dark) return;
+  p->markAllRead();
+  if (curr == msg_preview) gotoHomeScreen();
+  _next_refresh = 0;
 }
 
 // the alarm: once a day at its minute
@@ -3430,6 +3156,33 @@ void UITask::openGames() {
   if (!games) return;
   ((GamesScreen*)games)->enter();
   setCurrScreen(games);
+}
+
+// a 5 s hold: the big clock (the e-ink clock on e-ink) over the current
+// screen; any press goes back to that screen as it was
+void UITask::openClockPeek() {
+  UIScreen* c = charge_clock != NULL ? charge_clock : clock;
+  if (c == NULL || _display == NULL) return;
+  if (curr != c) {
+    _clock_back = curr;
+    curr = c;   // not setCurrScreen: the screen below keeps its state (a draft stays open)
+  }
+  if (!_display->isOn()) _display->turnOn();
+  _auto_off = millis() + AUTO_OFF_MILLIS;
+  _next_refresh = 0;
+}
+
+bool UITask::closeClockPeek() {
+  if (_clock_back == NULL) return false;
+  UIScreen* back = _clock_back;
+  _clock_back = NULL;
+  if (curr != clock && curr != charge_clock) return false;
+  curr = back;
+  if (_display != NULL && !_display->isOn()) _display->turnOn();
+  _auto_off = millis() + AUTO_OFF_MILLIS;
+  _idle_since = millis();
+  _next_refresh = 0;
+  return true;
 }
 
 void UITask::openStopwatch() {
@@ -3510,7 +3263,6 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   badge = display != NULL ? new BadgeScreen(this) : NULL;
 #endif
   games = display != NULL ? new GamesScreen(this) : NULL;
-  sos = display != NULL ? new SosScreen(this) : NULL;
   charge_clock = (display != NULL && !display->isEink())
       ? new ChargeClockScreen(this, &rtc_clock, (MsgPreviewScreen*)msg_preview, node_prefs) : NULL;
 #ifdef BOOK_READER
@@ -3520,7 +3272,6 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   sent = display != NULL ? new SentScreen(this) : NULL;
   relays = display != NULL ? new RelayScreen(this) : NULL;
   chats = display != NULL ? new ChatScreen(this, &rtc_clock, _chat_log) : NULL;
-  sos_alert = display != NULL ? new SosAlertScreen(this) : NULL;
   _idle_since = millis();
   syncDisplayRefresh();
   setCurrScreen(splash);
@@ -3595,8 +3346,8 @@ void UITask::keepDisplayAwake() {
 }
 
 void UITask::notify(UIEventType t) {
-  // quiet hours: messages make no sound (an SOS alarm screen still does)
-  if (the_mesh.nightNow() && !inSosAlert() &&
+  // quiet hours: messages make no sound
+  if (the_mesh.nightNow() &&
       (t == UIEventType::contactMessage || t == UIEventType::channelMessage || t == UIEventType::roomMessage)) return;
 #if defined(PIN_BUZZER)
 switch(t){
@@ -3619,10 +3370,10 @@ switch(t){
 #endif
 
 #ifdef PIN_VIBRATION
-  // a contact: two pulses, a channel: one, an SOS alarm: three
+  // a contact: two pulses, a channel: one
   if (t != UIEventType::none) {
     vibration.trigger();
-    _vib_more = t == UIEventType::contactMessage ? (inSosAlert() ? 2 : 1) : 0;
+    _vib_more = t == UIEventType::contactMessage ? 1 : 0;
     _vib_next = millis() + 600;
   }
 #endif
@@ -3635,9 +3386,9 @@ int UITask::getDeviceStored() const {
 }
 
 void UITask::clearTakenMsg() {
-  // The phone took a message. The copy on this device stays unread until it is
-  // read or dismissed with the button: neither the phone nor the running line
-  // marks it read here.
+  // The phone took a message. Without `Phone read` the copy on this device
+  // stays unread until it is read or dismissed with the button; with it,
+  // checkPhoneRead() marks everything read once the phone has taken it all.
   if (!msg_preview) return;
   if (curr == msg_preview || curr == clock || curr == charge_clock || curr == home) {
     _next_refresh = 100;
@@ -3649,7 +3400,7 @@ void UITask::msgRead(int msgcount) {
   // The phone drains the offline queue as soon as a message arrives. That must
   // not dismiss the e-ink clock; the footer count already updated in newMsg.
   // an open message window stays open: only button presses read it
-  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch() && !inGlance() && !inBadge() && !inGames() && !inSos()) {
+  if (msgcount == 0 && curr != clock && curr != charge_clock && curr != msg_preview && !inReader() && !inCompose() && !inSent() && !inRelays() && !inStopwatch() && !inGlance() && !inBadge() && !inGames() && !inClockPeek()) {
     gotoHomeScreen();
   } else if (curr == home) {
     _next_refresh = 100;
@@ -3668,20 +3419,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
     _chat_log.add(rtc_clock.getCurrentTime(), from, from_name, text);
   }
   _idle_since = millis();   // the big clock waits before covering the new message
-  // an SOS from someone: the alarm screen, wherever we are (not over our own SOS)
-  bool sos_in = strstr(text, "SOS!") != NULL && sos_alert != NULL && !inSos();
-  if (sos_in) {
-    const char* who = from_name;
-    char sender[32];
-    if (group) {   // channel text is "Name: ..."
-      const char* colon = strchr(text, ':');
-      int n = colon ? (int)(colon - text) : 0;
-      if (n > 0 && n < (int)sizeof(sender)) { memcpy(sender, text, n); sender[n] = 0; who = sender; }
-    }
-    ((SosAlertScreen*)sos_alert)->show(who, text);
-    setCurrScreen(sos_alert);
-    _locked = false;
-  } else if (curr == clock || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inSos() || inChats() || inSosAlert()) {   // reader, writer and Sent only show an envelope
+  if (curr == clock || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inBadge() || inGames() || inChats()) {   // reader, writer and Sent only show an envelope
     _next_refresh = 100;
   } else {
     setCurrScreen(msg_preview);
@@ -3689,7 +3427,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     // with the running line on, every incoming message wakes the screen (not in quiet hours)
-    if (!_display->isOn() && (sos_in || ((tickerEnabled() || !hasConnection()) && !the_mesh.nightNow()))) {
+    if (!_display->isOn() && (tickerEnabled() || !hasConnection()) && !the_mesh.nightNow()) {
       _display->turnOn();
     }
     if (_display->isOn()) {
@@ -3735,7 +3473,7 @@ void UITask::updateChargeClock() {
 #if AUTO_OFF_MILLIS > 0
   if (charge_clock == NULL || _display == NULL || _node_prefs == NULL) return;
   if (_node_prefs->charge_clock == 0) {
-    if (curr == charge_clock) gotoHomeScreen();
+    if (curr == charge_clock && !inClockPeek()) gotoHomeScreen();
     return;
   }
   bool steady = !canSensePower() || (_board != NULL && _board->isExternalPowered());
@@ -3773,6 +3511,7 @@ void UITask::updateChargeClock() {
 void UITask::setCurrScreen(UIScreen* c) {
   if (curr == compose && c != compose && compose) ((ComposeScreen*)compose)->onLeave();
   curr = c;
+  _clock_back = NULL;   // another screen took over the clock opened by a hold
   _next_refresh = 100;
   if (c == home) _idle_since = millis();
 }
@@ -3844,6 +3583,7 @@ void UITask::loop() {
     user_btn.setLongMillis(inCompose() && base_long > 0 ? COMPOSE_HOLD_MILLIS : base_long);
   }
   int ev = user_btn.check();
+  if (ev != BUTTON_EVENT_NONE && closeClockPeek()) ev = BUTTON_EVENT_NONE;   // any press: back from the clock
   if (keyLockFilter(ev)) ev = BUTTON_EVENT_NONE;
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
@@ -3857,7 +3597,6 @@ void UITask::loop() {
     c = handleQuadClick(KEY_QUAD);
   } else if (ev == BUTTON_EVENT_PENTA_CLICK) {   // five: home from anywhere (the Write keyboard keeps its own five)
     if (inCompose() || inSent()) c = handleQuadClick(KEY_PENTA);
-    else if (inSos() || inSosAlert()) c = handleQuadClick(KEY_QUAD);
     else goHomeAll();
   } else if (ev == BUTTON_EVENT_HEXA_CLICK) {    // six to nine: stopwatch (the keyboard keeps its five)
     c = handleManyClicks();
@@ -3878,6 +3617,7 @@ void UITask::loop() {
 #if defined(PIN_USER_BTN_ANA)
   if (abs(millis() - _analogue_pin_read_millis) > 10) {
     int ev = analog_btn.check();
+    if (ev != BUTTON_EVENT_NONE && closeClockPeek()) ev = BUTTON_EVENT_NONE;
     if (keyLockFilter(ev)) ev = BUTTON_EVENT_NONE;
     if (ev == BUTTON_EVENT_CLICK) {
       c = checkDisplayOn(KEY_NEXT);
@@ -3891,8 +3631,7 @@ void UITask::loop() {
       c = handleQuadClick(KEY_QUAD);
     } else if (ev == BUTTON_EVENT_PENTA_CLICK) {
       if (inCompose() || inSent()) c = handleQuadClick(KEY_PENTA);
-      else if (inSos() || inSosAlert()) c = handleQuadClick(KEY_QUAD);
-      else goHomeAll();
+        else goHomeAll();
     } else if (ev == BUTTON_EVENT_HEXA_CLICK) {
       c = handleManyClicks();
     } else if (ev == BUTTON_EVENT_MANY_CLICK) {
@@ -3913,6 +3652,7 @@ void UITask::loop() {
   }
 #endif
 
+  if (c != 0 && closeClockPeek()) c = 0;   // joystick / rotary: back from the clock too
   if (c != 0 && curr) {
     curr->handleInput(c);
     _idle_since = millis();
@@ -3931,17 +3671,14 @@ void UITask::loop() {
   updateChargeClock();
 
 #ifdef PIN_USER_BTN
-  {   // SOS: the button held 5 s on any screen but a game
+  {   // the button held 5 s on any screen but a game: the big clock until the next press
     static unsigned long held_since = 0;
     static bool fired = false;
     if (isButtonPressed()) {
       if (held_since == 0) held_since = millis();
-      else if (!fired && sos != NULL && !_locked && !inGames() && !inSos() && (long)(millis() - held_since) >= 5000
-               && !(curr == home && ((HomeScreen*)home)->shuttingDown())) {
+      else if (!fired && (long)(millis() - held_since) >= 5000) {
         fired = true;
-        if (_display != NULL && !_display->isOn()) _display->turnOn();
-        if (!the_mesh.sosActive()) ((SosScreen*)sos)->arm();
-        setCurrScreen(sos);
+        if (!inGames() && !(curr == home && ((HomeScreen*)home)->shuttingDown())) openClockPeek();
       }
     } else {
       held_since = 0;
@@ -3949,14 +3686,7 @@ void UITask::loop() {
     }
   }
 #endif
-  if (curr == sos && _display != NULL) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;
-    if (!_display->isOn()) _display->turnOn();
-  }
-  if (inSosAlert() && _display != NULL && ((SosAlertScreen*)sos_alert)->active()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;
-    if (!_display->isOn()) _display->turnOn();
-  }
+  checkPhoneRead();
   checkAlarm();
   sampleBattery();
 #ifdef PIN_VIBRATION
@@ -4007,6 +3737,8 @@ void UITask::loop() {
     if (millis() > _auto_off) {
       if (_display->isOn() && _node_prefs != NULL && _node_prefs->key_lock && !_display->isEink()) _locked = true;
       _display->turnOff();
+      if (_clock_back != NULL && (curr == clock || curr == charge_clock)) curr = _clock_back;   // dark: the clock is gone
+      _clock_back = NULL;
     }
 #endif
   }
@@ -4072,7 +3804,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleQuadClick(char c) {
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGlance() || inBadge() || inGames() || inSos() || inChats() || inSosAlert()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGlance() || inBadge() || inGames() || inChats()) return c;
   return 0;
 }
 
@@ -4081,7 +3813,7 @@ char UITask::handleQuadClick(char c) {
 // ten or more the badge
 char UITask::handleManyClicks(bool ten) {
   if (inCompose() || inSent()) return handleQuadClick(KEY_PENTA);
-  if (inGames() || inSos()) return 0;   // fast tapping in a game (or SOS) is not a request for the stopwatch
+  if (inGames()) return 0;   // fast tapping in a game is not a request for the stopwatch
   if (_display == NULL) return 0;
   if (ten && badge != NULL) {
     if (!_display->isOn()) _display->turnOn();
@@ -4098,7 +3830,7 @@ char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   c = checkDisplayOn(c);
   if (c == 0) return 0;
-  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGlance() || inBadge() || inGames() || inSos() || inChats() || inSosAlert()) return c;
+  if (curr == home || curr == msg_preview || inReader() || inCompose() || inSent() || inRelays() || inStopwatch() || inGlance() || inBadge() || inGames() || inChats()) return c;
   toggleBuzzer();
   return 0;
 }

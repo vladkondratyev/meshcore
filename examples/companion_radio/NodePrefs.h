@@ -79,18 +79,15 @@ public:
   uint8_t kb_layout = 0;         // Write keyboard: 0 = ЙЦУКЕН / QWERTY, 1 = frequent letters together
   uint8_t auto_caps = 1;         // 1 = a capital at the start and after . ! ?
   uint8_t auto_cursor = 0;       // 1 = after a letter the keyboard cursor moves to the likely next one
-  uint8_t sos_chan = 0;          // SOS goes to this channel (and to every favourite contact)
   uint16_t game_best[5] = {0, 0, 0, 0, 0};   // Games page records: Runner, Tower, Snake, Blocks, Raid
   uint8_t sw_sport = 0;          // 1 = the stopwatch shows milliseconds next to the seconds
   uint8_t key_lock = 1;          // 1 = once the screen went dark, only a double click wakes the keys
+  uint8_t phone_read = 1;        // 1 = what the connected phone took counts as read here too
   uint8_t night_on = 0;          // 1 = quiet hours: no sound or buzz for messages
   uint8_t night_from = 23;       // quiet hours start, local hour
   uint8_t night_to = 7;          // quiet hours end, local hour
   uint8_t alarm_on = 0;          // 1 = the alarm rings every day at alarm_min
   uint16_t alarm_min = 7 * 60;   // alarm time, minutes after local midnight
-  uint8_t track_state = 0;       // GPS track: 0 off, 1 recording, 2 paused (survives a reboot)
-  uint8_t track_n = 0;           // the track being recorded
-  uint16_t track_step = 20;      // metres between track points
   char wifi_ssid[33] = "";       // WiFi builds: the network to join ("" = the one built in)
   char wifi_pwd[65] = "";
   uint8_t charge_clock = 0;      // 1 = big clock instead of a dark screen (on the charger, or always where power can't be sensed)
@@ -192,17 +189,14 @@ private:
       def("chclk", _parent->charge_clock);  // big clock on the charger
       def("swsp", _parent->sw_sport);       // sport stopwatch: milliseconds
       def("klock", _parent->key_lock);      // key lock after the screen goes dark
+      def("ph_rd", _parent->phone_read);    // the phone took it: read here too
       def("ngt", _parent->night_on);        // quiet hours
       def("ngt_f", _parent->night_from);
       def("ngt_t", _parent->night_to);
       def("alm", _parent->alarm_on);        // alarm clock
       def("alm_m", _parent->alarm_min);
-      def("trk", _parent->track_state);     // GPS track
-      def("trk_n", _parent->track_n);
-      def("trk_st", _parent->track_step);
       def("wf_ssid", _parent->wifi_ssid, sizeof(_parent->wifi_ssid));
       def("wf_pwd", _parent->wifi_pwd, sizeof(_parent->wifi_pwd));
-      def("sos_ch", _parent->sos_chan);
       def("gb_run", _parent->game_best[0]);  // game records
       def("gb_tow", _parent->game_best[1]);
       def("gb_snk", _parent->game_best[2]);

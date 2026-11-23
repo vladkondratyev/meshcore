@@ -27,7 +27,6 @@
 
 #include "DataStore.h"
 #include "NodePrefs.h"
-#include "TrackLog.h"
 #include "UiPhrases.h"
 #include "Relays.h"
 
@@ -138,16 +137,6 @@ public:
   enum { UI_ACK_NONE = 0, UI_ACK_WAIT, UI_ACK_OK, UI_ACK_LOST };
   int  uiSendDirect(const uint8_t* pub_prefix, const char* text);  // 0 failed, 1 direct, 2 flood
   uint8_t uiAttempt() const { return _ui_try + 1; }   // 1..UI_SEND_ATTEMPTS
-  // SOS: "SOS! geo:..." to the SOS channel and every favourite, again every
-  // SOS_REPEAT_MS until stopped; stopping sends "SOS: all clear" once
-  void sosStart();
-  void sosStop();
-  bool sosActive() const { return _sos_on; }
-  uint16_t sosRounds() const { return _sos_rounds; }
-  uint32_t sosNextSecs() const;
-  void sosTargets(char* buf, size_t n);
-  // "I'm OK" with the position, once, to the same channel and favourites as SOS
-  void okSend();
   // ping a contact from the device: a short message with an ack. The result
   // tells how long the ack took, how many hops the path has and the SNR heard.
   enum { PING_NONE = 0, PING_WAIT, PING_OK, PING_LOST };
@@ -159,16 +148,6 @@ public:
   const uint8_t* uiPingKey() const { return _ping_key; }
   // quiet hours: no sound or buzz for messages
   bool nightNow() const;
-  // GPS track (TrackLog.h): start turns the GPS on; the oldest tracks go
-  // when the space is needed, the room for a full contact list always stays
-  TrackLog& track() { return _track; }
-  uint8_t trackStart();          // 0 = no room
-  void trackPause();
-  void trackResume();
-  void trackStop();
-  bool trackFull() const { return _track_full; }
-  // a console command from the device itself (the WiFi track page)
-  void consoleCommand(char* cmd, Print& out) { runCLICommand(cmd, out); }
   bool uiSendChannel(int channel_idx, const char* text);
   uint8_t uiAckState() const;
   // Write page phrases: the console replaces any of them (set phrase N text)
@@ -294,11 +273,6 @@ public:
 private:
   char _phrase_ovr[UI_PHRASE_COUNT][UI_PHRASE_LEN];   // "" = the stock phrase
   char _badge[UI_BADGE_LEN] = {0};                    // "" = the node name
-  bool _sos_on = false;
-  uint16_t _sos_rounds = 0;
-  unsigned long _sos_next = 0;
-  void sosSend(bool all_clear);
-  void sendToSosTargets(const char* text);
   // ping from the device
   bool _ping_on = false;
   bool _ping_done = false;
@@ -312,14 +286,6 @@ private:
   char _usb_cmd[96];
   uint8_t _usb_len = 0;
   void checkUsbConsole();
-  TrackLog _track;
-  unsigned long _trk_next = 0, _trk_room_next = 0;
-  bool _track_full = false;
-  long trackRoom();
-  void trackMakeRoom();
-  void trackLoop();
-  void trackCommand(const char* arg, Print& out);
-  void checkSos();
   unsigned long _loop_max = 0, _loop_ui_max = 0, _loop_since = 0;
   uint32_t _loop_slow = 0, _loop_n = 0;
   uint32_t _ui_ack = 0;              // ack hash of the last message sent from the device UI

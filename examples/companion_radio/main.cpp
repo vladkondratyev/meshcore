@@ -17,7 +17,6 @@ static uint32_t _atoi(const char* sp) {
 
 // interface manager
 #include <helpers/MultiSerialInterface.h>
-#include "TrackWeb.h"
 MultiSerialInterface interface_manager;
 
 // include bluetooth interface
@@ -219,7 +218,6 @@ void setup() {
   }
   wifi_interface.begin(TCP_PORT);
   interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
-  trackWebBegin();   // GPS track page on port 80
 #endif
 
 // add usb interface
@@ -260,7 +258,6 @@ void loop() {
   unsigned long t0 = millis();
   the_mesh.loop();
   interface_manager.loop();
-  trackWebLoop();
   sensors.loop();
 #ifdef DISPLAY_CLASS
   unsigned long t_ui = millis();
